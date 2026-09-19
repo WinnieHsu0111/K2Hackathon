@@ -9,13 +9,39 @@
     <main>
       <header><span>BACKROOMS</span><span>LEVEL 0 / FILE 042</span></header>
       <div class="telemetry"><span id="inventory">KEY —</span><span id="threat">未偵測到威脅</span><button id="sound-toggle" type="button" aria-pressed="false">距離音效：關</button></div>
-      <div id="game" tabindex="0" aria-label="Backrooms 遊戲，WASD 或方向鍵移動，Shift 奔跑，R 重新開始"></div>
-      <p id="status" role="status">找到鑰匙。留意地板上的金色標記。</p>
-      <p class="controls">WASD／方向鍵 移動 · SHIFT 奔跑 · R 重來 <span>接近密碼門、碰觸文件即可互動</span></p>
+      <div id="game" tabindex="0" aria-label="Backrooms 遊戲，WASD 或方向鍵移動，Shift 奔跑，F 操作附近的燈光按鈕或控制台，R 重新開始"></div>
+      <p id="status" role="status">第一道門需要燈光密碼。前往 C 控制台，靠近後按 F 播放。</p>
+      <p class="controls">WASD／方向鍵 移動 · SHIFT 奔跑 · F 互動 · R 重來 <span>接近密碼門、碰觸文件即可互動</span></p>
+      <section class="agent-panel" aria-label="K2 遊玩控制">
+        <h2>K2 PLAYER</h2>
+        <p class="note">先手動完成燈光關卡。K2 決定目標，遊戲引擎負責尋路；思考期間暫停遊戲。</p>
+        <label for="backend-url">後端網址</label>
+        <input id="backend-url" type="url" value="http://127.0.0.1:8000" />
+        <div class="agent-controls">
+          <button id="ai-step" type="button">K2 Step</button>
+          <button id="ai-auto" type="button">▶ Let K2 Play</button>
+          <button id="ai-pause" type="button">暫停</button>
+          <button id="ai-reset" type="button">重來</button>
+        </div>
+        <p id="agent-status" role="status"></p>
+        <ol id="agent-log" aria-label="K2 決策紀錄"></ol>
+      </section>
     </main>
     <dialog id="interaction" aria-labelledby="dialog-title">
       <p class="eyebrow" id="dialog-label">ACCESS CONTROL</p>
       <h1 id="dialog-title">輸入密碼</h1>
+      <section id="light-panel" hidden>
+        <p>看完四盞燈的順序，再回房間依序靠近 1–4 按鈕並按 F。路過按鈕不會觸發。</p>
+        <div class="light-preview" aria-label="燈光序列預覽">
+          <div data-light="1"><strong>1</strong><span>RED</span></div>
+          <div data-light="2"><strong>2</strong><span>BLUE</span></div>
+          <div data-light="3"><strong>3</strong><span>GREEN</span></div>
+          <div data-light="4"><strong>4</strong><span>YELLOW</span></div>
+        </div>
+        <p id="light-current" aria-live="polite">—</p>
+        <p id="light-playback-status" role="status"></p>
+        <button id="replay-lights" type="button">重新播放序列</button>
+      </section>
       <section id="lock-panel">
         <p>鑰匙牌上的三位數，可以解除這道門鎖。</p>
         <form id="lock-form">
@@ -31,6 +57,10 @@
         <div id="answers" class="answers"></div>
         <p class="note">警告：判讀錯誤仍會解除門禁，但可能啟動異常收容程序。</p>
       </section>
+      <div class="agent-controls">
+        <button id="dialog-ai-step" type="button">K2 Step</button>
+        <button id="dialog-ai-pause" type="button">暫停 K2</button>
+      </div>
       <button id="close-dialog" class="secondary" type="button">先離開 · ESC</button>
     </dialog>
     <script type="module" src="/src/main.js"></script>

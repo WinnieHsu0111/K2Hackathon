@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
-import { GameSession, MAP, TILE, DOOR_CODE, QUESTION, MONSTER_STATE } from './level.js';
+import { GameSession, MAP, TILE, DOOR_CODE, QUESTION, MONSTER_STATE, LIGHTS, LIGHT_COLORS } from './level.js';
 import { createThreatAudio } from './audio.js';
 import './style.css';
+import { createAgentPanel } from './agent-panel.js';
 
 const byId = (id) => document.getElementById(id);
 const updateText = (element, value) => { if (element.textContent !== value) element.textContent = value; };
@@ -16,19 +17,21 @@ class GameUI {
       const button = document.createElement('button');
       button.type = 'button';
       button.textContent = `${option.id}.  ${option.value}`;
-      button.onclick = () => { this.session.answer(option.id); this.close(); };
+      button.onclick = () => { this.onManual?.(); this.session.answer(option.id); this.close(); };
       return button;
     }));
     byId('lock-form').onsubmit = (event) => {
       event.preventDefault();
+      this.onManual?.();
       if (this.session.unlock(byId('door-code').value)) this.close();
       else {
         byId('lock-error').textContent = '密碼不符。再看一次鑰匙牌上的三位數。';
         byId('door-code').select();
       }
     };
-    byId('close-dialog').onclick = () => this.close();
-    this.dialog.oncancel = (event) => { event.preventDefault(); this.close(); };
+    byId('close-dialog').onclick = () => { this.onManual?.(); this.close(); };
+    byId('replay-lights').onclick = () => { this.onManual?.(); this.session.playLightSequence(); };
+    this.dialog.oncancel = (event) => { event.preventDefault(); this.onManual?.(); this.close(); };
   }
 
   bind(session, keyboard) {
@@ -50,7 +53,7 @@ class GameUI {
   sync() {
     const session = this.session;
     updateText(byId('status'), session.message);
-    updateText(byId('inventory'), session.hasKey ? `KEY ✓  /  CODE ${DOOR_CODE}` : 'KEY —');
+    updateText(byId('inventory'), !session.firstGateOpen ? `LIGHT CODE ${session.lightInput.length}/4` : session.hasKey ? `KEY ✓  /  CODE ${DOOR_CODE}` : 'KEY —');
     let threat = '未偵測到威脅';
     if (session.won) threat = '已成功逃離';
     else if (session.monsterActive) {
@@ -63,21 +66,32 @@ class GameUI {
     updateText(byId('threat'), threat);
     byId('threat').dataset.active = String(session.monsterActive && !session.playerInSafeZone && session.monster.state === MONSTER_STATE.CHASE);
 
+    if (!session.modal && this.currentModal) this.close();
     if (session.modal && this.currentModal !== session.modal) {
       this.currentModal = session.modal;
       const isLock = session.modal === 'lock';
+      const isLight = session.modal === 'lights';
       byId('lock-panel').hidden = !isLock;
-      byId('document-panel').hidden = isLock;
-      byId('dialog-title').textContent = isLock ? '輸入密碼' : `FILE #${QUESTION.id}`;
-      byId('dialog-label').textContent = isLock ? 'ACCESS CONTROL / LOCKED' : 'RECOVERED DOCUMENT';
+      byId('document-panel').hidden = isLock || isLight;
+      byId('light-panel').hidden = !isLight;
+      byId('dialog-title').textContent = isLight ? '記住燈光順序' : isLock ? '輸入密碼' : `FILE #${QUESTION.id}`;
+      byId('dialog-label').textContent = isLight ? 'LIGHT CODE / FIRST GATE' : isLock ? 'ACCESS CONTROL / LOCKED' : 'RECOVERED DOCUMENT';
       byId('lock-error').textContent = '';
       byId('door-code').value = '';
       this.keyboard.resetKeys();
       this.keyboard.enabled = false;
       this.dialog.showModal();
       if (isLock) byId('door-code').focus();
+      else if (isLight) byId('close-dialog').focus();
       else byId('answers').querySelector('button').focus();
     }
+    if (session.modal === 'lights') {
+      updateText(byId('light-playback-status'), session.lightNotice);
+      updateText(byId('light-current'), session.activeLight ? `${session.activeLight} · ${LIGHTS[session.activeLight]}` : '—');
+      for (const light of document.querySelectorAll('[data-light]')) light.classList.toggle('lit', Number(light.dataset.light) === session.activeLight);
+      byId('replay-lights').disabled = session.lightPhase === 'playback';
+    }
+    byId('close-dialog').textContent = session.modal === 'lights' && session.lightPhase === 'input' ? '返回房間，開始輸入 →' : '先離開 · ESC';
   }
 }
 
@@ -96,9 +110,14 @@ class Backrooms extends Phaser.Scene {
     this.lastRespawns = 0;
     this.finished = false;
     this.cursors = this.input.keyboard.createCursorKeys();
-    this.keys = this.input.keyboard.addKeys('W,A,S,D,SHIFT,R');
+    this.keys = this.input.keyboard.addKeys('W,A,S,D,SHIFT,R,F');
+    this.lightButtons = {};
     ui.bind(this.session, this.input.keyboard);
-    this.events.once('shutdown', () => ui.close());
+    this.agentPanel = createAgentPanel(this.session, () => this.scene.restart());
+    ui.onManual = () => { if (this.agentPanel.controller.active) this.agentPanel.controller.pause('手動互動已接手。'); };
+    byId('backend-url').onfocus = () => { this.input.keyboard.resetKeys(); this.input.keyboard.enabled = false; };
+    byId('backend-url').onblur = () => { this.input.keyboard.resetKeys(); this.input.keyboard.enabled = !this.session.modal; };
+    this.events.once('shutdown', () => { this.agentPanel.destroy(); ui.close(); });
 
     MAP.forEach((row, y) => [...row].forEach((cell, x) => {
       const px = x * TILE + TILE / 2, py = y * TILE + TILE / 2;
@@ -108,6 +127,16 @@ class Backrooms extends Phaser.Scene {
         return;
       }
       this.add.rectangle(px, py, TILE, TILE, (x + y) % 2 ? 0x655d36 : 0x6b6239).setStrokeStyle(1, 0x595132);
+      if (Object.hasOwn(LIGHTS, cell)) {
+        const bulb = this.add.circle(px, py, 16, LIGHT_COLORS[cell]).setStrokeStyle(2, LIGHT_COLORS[cell]);
+        const label = this.label(px, py, cell, '#111810', 18);
+        this.lightButtons[cell] = { bulb, label };
+      }
+      if (cell === 'C') {
+        this.add.rectangle(px, py, 36, 32, 0x253d3a).setStrokeStyle(2, 0x8abcb0);
+        this.label(px, py - 2, 'C', '#d8eee4', 18);
+        this.label(px, py + 21, 'F · PLAY', '#b9d7c6', 8);
+      }
       if (cell === 'K') {
         this.keyMarker = this.add.container(px, py, [
           this.add.circle(-4, -3, 7, 0xebcf63).setStrokeStyle(2, 0xf9e9a8),
@@ -115,11 +144,12 @@ class Backrooms extends Phaser.Scene {
           this.add.rectangle(10, 8, 8, 4, 0xebcf63),
         ]);
       }
-      if (cell === 'L' || cell === 'G') {
+      if (cell === 'A' || cell === 'L' || cell === 'G') {
         const block = this.add.rectangle(px, py, TILE - 4, TILE - 4, cell === 'L' ? 0x413e2b : 0x404637)
           .setStrokeStyle(2, cell === 'L' ? 0xe0bd69 : 0xacae83);
-        const label = this.label(px, py, cell === 'L' ? 'LOCK' : 'GATE', '#e1d299', 10);
-        this[cell === 'L' ? 'lockDoor' : 'questionGate'] = { block, label };
+        const title = cell === 'A' ? 'CODE' : cell === 'L' ? 'LOCK' : 'GATE';
+        const label = this.label(px, py, title, '#e1d299', 10);
+        this[cell === 'A' ? 'firstGate' : cell === 'L' ? 'lockDoor' : 'questionGate'] = { block, label, title };
       }
       if (cell === 'T') {
         this.add.rectangle(px, py, TILE, TILE, 0x39261c).setStrokeStyle(2, 0xa56837);
@@ -177,9 +207,13 @@ class Backrooms extends Phaser.Scene {
     this.keyMarker.setVisible(!state.hasKey);
     this.paper.setAlpha(state.documentAnswered ? 0.35 : 1);
     this.monster.setVisible(state.monsterActive).setPosition(state.monster.x, state.monster.y);
-    for (const [door, open] of [[this.lockDoor, state.lockOpen], [this.questionGate, state.gateOpen]]) {
+    for (const [door, open] of [[this.firstGate, state.firstGateOpen], [this.lockDoor, state.lockOpen], [this.questionGate, state.gateOpen]]) {
       door.block.setAlpha(open ? 0.15 : 1);
-      door.label.setText(open ? 'OPEN' : door === this.lockDoor ? 'LOCK' : 'GATE');
+      door.label.setText(open ? 'OPEN' : door.title);
+    }
+    for (const [id, light] of Object.entries(this.lightButtons)) {
+      const active = Number(id) === state.activeLight;
+      light.bulb.setAlpha(active ? 1 : 0.5).setScale(active ? 1.15 : 1);
     }
     if (state.respawns !== this.lastRespawns) {
       this.lastRespawns = state.respawns;
@@ -193,16 +227,30 @@ class Backrooms extends Phaser.Scene {
       }).setOrigin(0.5).setScrollFactor(0).setDepth(20);
     }
     ui.sync();
+    this.agentPanel.sync();
     audio.update(state);
   }
 
   update(_time, delta) {
-    if (this.session.modal) return;
+    const agent = this.agentPanel.controller;
+    const typing = document.activeElement?.matches('input, textarea');
+    const humanInput = !typing && this.input.keyboard.enabled &&
+      [this.keys.W, this.keys.A, this.keys.S, this.keys.D, this.keys.F, this.keys.R,
+        this.cursors.up, this.cursors.down, this.cursors.left, this.cursors.right].some((key) => key.isDown);
+    if (humanInput && agent.active) agent.pause('手動操作已接手，K2 已暫停。');
+    if (agent.tick(delta)) { this.renderState(); return; }
+    if (typing && !this.session.modal) { this.renderState(); return; }
+    if (this.session.modal) {
+      this.session.update(delta);
+      this.renderState();
+      return;
+    }
     if (Phaser.Input.Keyboard.JustDown(this.keys.R)) {
       this.input.keyboard.resetKeys();
       this.scene.restart();
       return;
     }
+    if (Phaser.Input.Keyboard.JustDown(this.keys.F)) this.session.interact();
     const x = Number(this.keys.D.isDown || this.cursors.right.isDown) - Number(this.keys.A.isDown || this.cursors.left.isDown);
     const y = Number(this.keys.S.isDown || this.cursors.down.isDown) - Number(this.keys.W.isDown || this.cursors.up.isDown);
     this.session.update(delta, { x, y, sprint: this.keys.SHIFT.isDown });
