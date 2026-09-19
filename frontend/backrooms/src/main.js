@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { GameSession, MAP, TILE, DOOR_CODE, QUESTION, MONSTER_STATE } from './level.js';
 import { createThreatAudio } from './audio.js';
+import { K2Driver } from './k2driver.js';
 import './style.css';
 
 const byId = (id) => document.getElementById(id);
@@ -84,6 +85,27 @@ class GameUI {
 const ui = new GameUI();
 const audio = createThreatAudio(byId('sound-toggle'));
 
+// Append a K2 reasoning event to the side panel.
+function appendReasoning(evt) {
+  const panel = byId('reasoning');
+  if (!panel) return;
+  const line = document.createElement('div');
+  line.className = `reason-line reason-${evt.type}`;
+  if (evt.type === 'decision') {
+    line.innerHTML = `<b>→ ${evt.intent}</b>${evt.answerId ? ` (${evt.answerId})` : ''}<br>${evt.reasoning ?? ''}`;
+  } else if (evt.type === 'agent_thinking') {
+    line.textContent = `${evt.agent}：${evt.message}`;
+  } else if (evt.type === 'agent_result') {
+    line.innerHTML = `<b>${evt.agent}</b>：${evt.content}`;
+  } else {
+    line.textContent = evt.message ?? '';
+  }
+  panel.appendChild(line);
+  panel.scrollTop = panel.scrollHeight;
+  // Keep the panel from growing unbounded.
+  while (panel.children.length > 40) panel.removeChild(panel.firstChild);
+}
+
 class Backrooms extends Phaser.Scene {
   constructor() { super('Backrooms'); }
 
@@ -96,8 +118,21 @@ class Backrooms extends Phaser.Scene {
     this.lastRespawns = 0;
     this.finished = false;
     this.cursors = this.input.keyboard.createCursorKeys();
-    this.keys = this.input.keyboard.addKeys('W,A,S,D,SHIFT,R');
+    this.keys = this.input.keyboard.addKeys('W,A,S,D,SHIFT,R,K');
     ui.bind(this.session, this.input.keyboard);
+
+    // K2 auto-play driver. Toggle via K key or the #k2-toggle button.
+    this.k2 = new K2Driver((evt) => appendReasoning(evt));
+    this.k2.setQuestion(QUESTION);
+    const k2btn = byId('k2-toggle');
+    if (k2btn) {
+      k2btn.onclick = () => {
+        this.k2.enabled = !this.k2.enabled;
+        k2btn.setAttribute('aria-pressed', String(this.k2.enabled));
+        k2btn.textContent = this.k2.enabled ? 'K2 自動遊玩：開' : 'K2 自動遊玩：關';
+        appendReasoning({ type: 'status', message: this.k2.enabled ? 'K2 自動遊玩：開啟' : 'K2 自動遊玩：關閉' });
+      };
+    }
     this.events.once('shutdown', () => ui.close());
 
     MAP.forEach((row, y) => [...row].forEach((cell, x) => {
@@ -197,12 +232,26 @@ class Backrooms extends Phaser.Scene {
   }
 
   update(_time, delta) {
-    if (this.session.modal) return;
     if (Phaser.Input.Keyboard.JustDown(this.keys.R)) {
       this.input.keyboard.resetKeys();
       this.scene.restart();
       return;
     }
+    // Toggle K2 auto-play with the K key.
+    if (Phaser.Input.Keyboard.JustDown(this.keys.K)) {
+      this.k2.enabled = !this.k2.enabled;
+      appendReasoning({ type: 'status', message: this.k2.enabled ? 'K2 自動遊玩：開啟' : 'K2 自動遊玩：關閉' });
+    }
+
+    if (this.k2.enabled) {
+      // K2 drives — it can also resolve modals (lock/document), so run before the modal guard.
+      const input = this.k2.step(this.session, delta);
+      if (!this.session.modal) this.session.update(delta, input);
+      this.renderState();
+      return;
+    }
+
+    if (this.session.modal) return;
     const x = Number(this.keys.D.isDown || this.cursors.right.isDown) - Number(this.keys.A.isDown || this.cursors.left.isDown);
     const y = Number(this.keys.S.isDown || this.cursors.down.isDown) - Number(this.keys.W.isDown || this.cursors.up.isDown);
     this.session.update(delta, { x, y, sprint: this.keys.SHIFT.isDown });

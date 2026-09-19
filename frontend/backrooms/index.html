@@ -8,10 +8,16 @@
   <body>
     <main>
       <header><span>BACKROOMS</span><span>LEVEL 0 / FILE 042</span></header>
-      <div class="telemetry"><span id="inventory">KEY —</span><span id="threat">未偵測到威脅</span><button id="sound-toggle" type="button" aria-pressed="false">距離音效：關</button></div>
-      <div id="game" tabindex="0" aria-label="Backrooms 遊戲，WASD 或方向鍵移動，Shift 奔跑，R 重新開始"></div>
+      <div class="telemetry"><span id="inventory">KEY —</span><span id="threat">未偵測到威脅</span><button id="k2-toggle" type="button" aria-pressed="false">K2 自動遊玩：關</button><button id="sound-toggle" type="button" aria-pressed="false">距離音效：關</button></div>
+      <div class="stage">
+        <div id="game" tabindex="0" aria-label="Backrooms 遊戲，WASD 或方向鍵移動，Shift 奔跑，R 重新開始"></div>
+        <aside id="reasoning-panel">
+          <h2>K2 推理</h2>
+          <div id="reasoning" aria-live="polite"></div>
+        </aside>
+      </div>
       <p id="status" role="status">找到鑰匙。留意地板上的金色標記。</p>
-      <p class="controls">WASD／方向鍵 移動 · SHIFT 奔跑 · R 重來 <span>接近密碼門、碰觸文件即可互動</span></p>
+      <p class="controls">WASD／方向鍵 移動 · SHIFT 奔跑 · R 重來 · <strong>K 讓 K2 自動遊玩</strong> <span>接近密碼門、碰觸文件即可互動</span></p>
     </main>
     <dialog id="interaction" aria-labelledby="dialog-title">
       <p class="eyebrow" id="dialog-label">ACCESS CONTROL</p>
