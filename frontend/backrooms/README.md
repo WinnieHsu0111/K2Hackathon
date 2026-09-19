@@ -1,63 +1,10 @@
-# Backrooms 2D Starter
+# Backrooms — File 042
 
-Phaser 3.90.0 + Vite 8 + JavaScript。瀏覽器俯視角、桌面鍵盤操作的最小遊戲原型。
+K2Hackathon 的獨立 2D 遊戲前端，位置為 `frontend/backrooms/`。使用 Phaser 3.90、Vite 8、JavaScript。
 
-## 啟動
+## 啟動與檢查
 
-先從 https://nodejs.org/en/download 安裝 Node.js LTS（本專案需要 22.12 或更新版本，建議目前 LTS）。npm 會一起安裝。
-
-在這個資料夾開啟終端機：
-
-```sh
-npm install
-npm run dev
-```
-
-開啟終端機顯示的本機網址，通常是 http://127.0.0.1:5173 。不要直接雙擊 index.html。
-
-```sh
-npm run build
-npm run preview
-```
-
-build 會把部署用靜態檔案放到 dist/。預覽請使用 preview 顯示的網址。
-
-## 已包含
-
-- WASD／方向鍵移動，Shift 奔跑，R 重來。
-- 牆壁碰撞、跟隨鏡頭、黃色走廊。
-- 圓形漸暗視野、綠色出口與過關訊息。
-- 所有圖形由程式生成，不需要下載美術素材。
-
-## 從哪裡改
-
-- src/main.js：遊戲邏輯。MAP 控制地圖，WALK_SPEED / RUN_SPEED 控制速度。
-- src/style.css：網頁外框與文字樣式。
-- index.html：遊戲容器、操作說明。
-
-MAP 中 # 是牆、. 是地板、P 是唯一出生點、E 是唯一出口。每列長度必須相同，最外圍保持牆壁，出口要能從出生點走到。若希望擴充地圖，先改 MAP，之後再考慮使用 Tiled。
-
-create() 建立場景、碰撞與鍵盤控制；update() 讀取方向並設定速度。Arcade Physics 處理每幀位移，因此不要再把速度乘上 delta。
-
-## 目前範圍
-
-這是探索原型，尚未加入怪物、音效、存檔、程序生成或手機觸控。視野是漸層遮罩，牆壁不會遮擋光線。Phaser 主程式包較大，正式部署前再考慮按需載入或客製建置。
-
-建議擴充順序：腳步與環境音 → 牆壁遮光 → 一隻會巡邏的怪物 → 多張手工地圖。
-
-## 官方文件
-
-- https://docs.phaser.io/phaser/getting-started/making-your-first-phaser-game
-- https://docs.phaser.io/api-documentation/api-documentation
-- https://vite.dev/guide/
-
-## 驗證狀態
-
-已通過 JavaScript 語法檢查，以及地圖尺寸、單一出生點／出口和出口可達性檢查。已使用 Node.js 24.21.0 完成 npm install 與 npm run build，並在瀏覽器確認遊戲畫面成功載入，未出現瀏覽器警告或錯誤。尚未完成整關操作測試。建置會提示 Phaser 主程式包超過 500 kB，這不影響本機啟動。
-
-## K2Hackathon 專案位置
-
-這個遊戲位於 `frontend/backrooms/`，是獨立的 Vite 前端。從 repository 根目錄啟動：
+在 repository 根目錄執行：
 
 ```sh
 cd frontend/backrooms
@@ -65,6 +12,44 @@ npm ci
 npm run dev
 ```
 
-`frontend/` 原有的 Next.js 應用使用自己的啟動指令；本遊戲的預設開發網址是 http://127.0.0.1:5173 。
+開啟終端機顯示的網址，預設 http://127.0.0.1:5173 。Node.js 建議使用目前 LTS，最低版本 22.12。
 
-提交本遊戲時，先確認目前分支與 diff；只加入需要提交的遊戲原始碼與 package-lock.json。node_modules/ 與 dist/ 已列入本資料夾的 .gitignore。
+```sh
+npm test
+npm run build
+```
+
+## 操作
+
+- WASD／方向鍵移動，Shift 奔跑，R 重新開始。
+- 撿到金色鑰匙後，畫面會顯示鑰匙牌上的密碼。接近密碼门會自動顯示輸入視窗。
+- 踩到陷阱會回到密碼門外，鑰匙與已開啟的門保留。
+- 碰到文件即可選答。答對會開門；答錯也會開門，但怪物開始追蹤玩家。
+- 地圖有三個 2×2 藍綠色 S 安全區。角色全身進入後，怪物改去遠處巡邏，不會消失或停在門口守候。
+- 離開安全區後，怪物繼續巡邏；只有玩家進入 7 格偵測距離且視線未被牆、門或安全區擋住，才會再追逐。
+- 怪物失去玩家視線時，會前往最後看見的位置搜尋；3 秒後改回巡邏。
+- 答錯後有 1.2 秒甦醒時間，讓玩家能穿過 G 門、轉向掩護。
+- 可按「距離音效」啟用低頻提示音。越接近怪物越大聲；進安全區不會突然靜音，而是隨怪物離開逐漸變小。
+- 被抓到會回到文件前，題目與 G 門重設，可重新作答。
+- 到達綠色 E 出口過關。
+- ESC 或「先離開」可關閉題目／密碼視窗；走離互動位置後重新接近，即可再次開啟。
+
+## 檔案
+
+- `src/level.js`：地圖、速度、密碼、題目、碰撞、關卡狀態與怪物尋路。
+- `src/main.js`：Phaser 場景繪製、鍵盤與 HTML 視窗整合。
+- `src/audio.js`：由玩家主動啟用的距離音效，不需要外部音檔。
+- `index.html` / `src/style.css`：提示、密碼輸入框、文件選答。
+- `tests/game.test.js`：完整通關路線、分支、陷阱、追逐、安全區與檢查點驗證。
+
+地圖符號：`#` 牆、`.` 地板、`P` 出生點、`K` 鑰匙、`L` 密碼門、`T` 陷阱、`D` 文件、`G` 題目門、`S` 安全區、`M` 怪物出生點、`E` 最終出口。
+
+## 題目與 K2
+
+目前使用固定題目，尚未呼叫 K2。FILE #042 的規則是「有效的紀錄值都應是奇數」，選項為 21、23、84，因此唯一正解為 C（84）。密碼為 042，會在撿到鑰匙時告知玩家。
+
+之後可以讓後端使用 K2 產生與 `QUESTION` 相同形狀的題目，並由後端判定答案；前端依判定結果改變門與怪物狀態。API key 不應放進前端。原型目前的密碼與答案可以從原始碼讀到，不適用於防作弊競賽。
+
+視野目前是圓形漸層遮罩，尚無牆壁遮光；目前使用桌面鍵盤操作。遊戲以格子碰撞和四方向 BFS 尋路控制角色與怪物，不使用重力物理。
+
+`node_modules/`、`dist/` 已被 `.gitignore` 排除。建置時可能會提示 Phaser 的主程式包大於 500 kB，並不影響遊戲執行。

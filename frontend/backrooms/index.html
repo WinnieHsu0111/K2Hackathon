@@ -3,14 +3,36 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Backrooms — Level 0</title>
+    <title>Backrooms — File 042</title>
   </head>
   <body>
     <main>
-      <header><span>BACKROOMS</span><span>LEVEL 0</span></header>
-      <div id="game" aria-label="Backrooms 俯視角遊戲，使用鍵盤操作"></div>
-      <p id="status" role="status">找到綠色出口。WASD／方向鍵移動 · Shift 奔跑 · R 重來</p>
+      <header><span>BACKROOMS</span><span>LEVEL 0 / FILE 042</span></header>
+      <div class="telemetry"><span id="inventory">KEY —</span><span id="threat">未偵測到威脅</span><button id="sound-toggle" type="button" aria-pressed="false">距離音效：關</button></div>
+      <div id="game" tabindex="0" aria-label="Backrooms 遊戲，WASD 或方向鍵移動，Shift 奔跑，R 重新開始"></div>
+      <p id="status" role="status">找到鑰匙。留意地板上的金色標記。</p>
+      <p class="controls">WASD／方向鍵 移動 · SHIFT 奔跑 · R 重來 <span>接近密碼門、碰觸文件即可互動</span></p>
     </main>
+    <dialog id="interaction" aria-labelledby="dialog-title">
+      <p class="eyebrow" id="dialog-label">ACCESS CONTROL</p>
+      <h1 id="dialog-title">輸入密碼</h1>
+      <section id="lock-panel">
+        <p>鑰匙牌上的三位數，可以解除這道門鎖。</p>
+        <form id="lock-form">
+          <label for="door-code">三位數密碼</label>
+          <input id="door-code" name="code" type="text" inputmode="numeric" pattern="[0-9]{3}" minlength="3" maxlength="3" autocomplete="off" required />
+          <p id="lock-error" role="alert"></p>
+          <button type="submit">解鎖門禁 →</button>
+        </form>
+      </section>
+      <section id="document-panel" hidden>
+        <p id="question-rule" class="rule"></p>
+        <p id="question-prompt"></p>
+        <div id="answers" class="answers"></div>
+        <p class="note">警告：判讀錯誤仍會解除門禁，但可能啟動異常收容程序。</p>
+      </section>
+      <button id="close-dialog" class="secondary" type="button">先離開 · ESC</button>
+    </dialog>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

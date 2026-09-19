@@ -1,120 +1,212 @@
 import Phaser from 'phaser';
+import { GameSession, MAP, TILE, DOOR_CODE, QUESTION, MONSTER_STATE } from './level.js';
+import { createThreatAudio } from './audio.js';
 import './style.css';
 
-// 地圖每列要一樣長：# 牆壁、. 地板、P 出生點、E 出口。
-const MAP = [
-  '#########################',
-  '#P......#...............#',
-  '#.......#.....#.........#',
-  '#.............#.........#',
-  '#####.#########.#####.###',
-  '#.....#.........#.......#',
-  '#.....#.........#.......#',
-  '#...............#.......#',
-  '#.#########.#####.#####.#',
-  '#.........#.............#',
-  '#.........#.....#.......#',
-  '#...............#.......#',
-  '###.###########.#####.###',
-  '#......................E#',
-  '#########################',
-];
-const TILE = 48;
-const WALK_SPEED = 145;
-const RUN_SPEED = 220;
-const status = document.querySelector('#status');
-const HELP = '找到綠色出口。WASD／方向鍵移動 · Shift 奔跑 · R 重來';
+const byId = (id) => document.getElementById(id);
+const updateText = (element, value) => { if (element.textContent !== value) element.textContent = value; };
+
+class GameUI {
+  constructor() {
+    this.dialog = byId('interaction');
+    this.currentModal = null;
+    byId('question-rule').textContent = QUESTION.rule;
+    byId('question-prompt').textContent = QUESTION.prompt;
+    byId('answers').replaceChildren(...QUESTION.options.map((option) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = `${option.id}.  ${option.value}`;
+      button.onclick = () => { this.session.answer(option.id); this.close(); };
+      return button;
+    }));
+    byId('lock-form').onsubmit = (event) => {
+      event.preventDefault();
+      if (this.session.unlock(byId('door-code').value)) this.close();
+      else {
+        byId('lock-error').textContent = '密碼不符。再看一次鑰匙牌上的三位數。';
+        byId('door-code').select();
+      }
+    };
+    byId('close-dialog').onclick = () => this.close();
+    this.dialog.oncancel = (event) => { event.preventDefault(); this.close(); };
+  }
+
+  bind(session, keyboard) {
+    this.close();
+    this.session = session;
+    this.keyboard = keyboard;
+  }
+
+  close() {
+    this.session?.dismiss();
+    if (this.dialog.open) this.dialog.close();
+    this.currentModal = null;
+    if (this.keyboard) {
+      this.keyboard.resetKeys();
+      this.keyboard.enabled = true;
+    }
+  }
+
+  sync() {
+    const session = this.session;
+    updateText(byId('status'), session.message);
+    updateText(byId('inventory'), session.hasKey ? `KEY ✓  /  CODE ${DOOR_CODE}` : 'KEY —');
+    let threat = '未偵測到威脅';
+    if (session.won) threat = '已成功逃離';
+    else if (session.monsterActive) {
+      if (session.playerInSafeZone) threat = '安全區 · 怪物正在巡邏';
+      else if (session.wakeRemaining > 0) threat = '異常甦醒中 · 立刻離開門口';
+      else if (session.monster.state === MONSTER_STATE.CHASE) threat = '被發現了 · 前往安全區';
+      else if (session.monster.state === MONSTER_STATE.SEARCH) threat = '怪物搜尋中 · 保持隱蔽';
+      else threat = '怪物巡邏中 · 避開視線';
+    } else if (session.playerInSafeZone) threat = '安全區';
+    updateText(byId('threat'), threat);
+    byId('threat').dataset.active = String(session.monsterActive && !session.playerInSafeZone && session.monster.state === MONSTER_STATE.CHASE);
+
+    if (session.modal && this.currentModal !== session.modal) {
+      this.currentModal = session.modal;
+      const isLock = session.modal === 'lock';
+      byId('lock-panel').hidden = !isLock;
+      byId('document-panel').hidden = isLock;
+      byId('dialog-title').textContent = isLock ? '輸入密碼' : `FILE #${QUESTION.id}`;
+      byId('dialog-label').textContent = isLock ? 'ACCESS CONTROL / LOCKED' : 'RECOVERED DOCUMENT';
+      byId('lock-error').textContent = '';
+      byId('door-code').value = '';
+      this.keyboard.resetKeys();
+      this.keyboard.enabled = false;
+      this.dialog.showModal();
+      if (isLock) byId('door-code').focus();
+      else byId('answers').querySelector('button').focus();
+    }
+  }
+}
+
+const ui = new GameUI();
+const audio = createThreatAudio(byId('sound-toggle'));
 
 class Backrooms extends Phaser.Scene {
-  constructor() {
-    super('Backrooms');
+  constructor() { super('Backrooms'); }
+
+  label(x, y, text, color = '#d8cc91', size = 14) {
+    return this.add.text(x, y, text, { fontFamily: 'monospace', fontSize: `${size}px`, color }).setOrigin(0.5);
   }
 
   create() {
-    this.won = false;
-    status.textContent = HELP;
-    this.physics.resume();
-    const width = MAP[0].length * TILE;
-    const height = MAP.length * TILE;
-    this.physics.world.setBounds(0, 0, width, height);
-    const walls = this.physics.add.staticGroup();
+    this.session = new GameSession();
+    this.lastRespawns = 0;
+    this.finished = false;
+    this.cursors = this.input.keyboard.createCursorKeys();
+    this.keys = this.input.keyboard.addKeys('W,A,S,D,SHIFT,R');
+    ui.bind(this.session, this.input.keyboard);
+    this.events.once('shutdown', () => ui.close());
 
     MAP.forEach((row, y) => [...row].forEach((cell, x) => {
-      const px = x * TILE + TILE / 2;
-      const py = y * TILE + TILE / 2;
+      const px = x * TILE + TILE / 2, py = y * TILE + TILE / 2;
       if (cell === '#') {
-        const wall = this.add.rectangle(px, py, TILE, TILE, 0x8d8249);
-        wall.setStrokeStyle(2, 0x645b31);
-        walls.add(wall); // StaticGroup 會替牆壁建立碰撞體。
+        this.add.rectangle(px, py, TILE, TILE, 0x8d8249).setStrokeStyle(2, 0x645b31);
         this.add.rectangle(px, py + 17, TILE - 4, 8, 0x716739);
-      } else {
-        this.add.rectangle(px, py, TILE, TILE, (x + y) % 2 ? 0x655d36 : 0x6b6239)
-          .setStrokeStyle(1, 0x595132);
-        if (cell === 'P') this.spawn = { x: px, y: py };
-        if (cell === 'E') {
-          this.exit = this.add.rectangle(px, py, 32, 32, 0x80be92).setDepth(1);
-          this.physics.add.existing(this.exit, true);
-        }
+        return;
+      }
+      this.add.rectangle(px, py, TILE, TILE, (x + y) % 2 ? 0x655d36 : 0x6b6239).setStrokeStyle(1, 0x595132);
+      if (cell === 'K') {
+        this.keyMarker = this.add.container(px, py, [
+          this.add.circle(-4, -3, 7, 0xebcf63).setStrokeStyle(2, 0xf9e9a8),
+          this.add.rectangle(5, 5, 5, 20, 0xebcf63).setRotation(-0.65),
+          this.add.rectangle(10, 8, 8, 4, 0xebcf63),
+        ]);
+      }
+      if (cell === 'L' || cell === 'G') {
+        const block = this.add.rectangle(px, py, TILE - 4, TILE - 4, cell === 'L' ? 0x413e2b : 0x404637)
+          .setStrokeStyle(2, cell === 'L' ? 0xe0bd69 : 0xacae83);
+        const label = this.label(px, py, cell === 'L' ? 'LOCK' : 'GATE', '#e1d299', 10);
+        this[cell === 'L' ? 'lockDoor' : 'questionGate'] = { block, label };
+      }
+      if (cell === 'T') {
+        this.add.rectangle(px, py, TILE, TILE, 0x39261c).setStrokeStyle(2, 0xa56837);
+        this.label(px, py - 1, '×', '#e2a760', 34);
+      }
+      if (cell === 'D') {
+        this.paper = this.add.container(px, py, [
+          this.add.rectangle(0, 0, 27, 34, 0xe4dcc0).setStrokeStyle(2, 0x9e956f),
+          this.add.rectangle(0, -6, 15, 2, 0x7d795f),
+          this.add.rectangle(0, 0, 15, 2, 0x7d795f),
+          this.add.rectangle(-3, 6, 9, 2, 0x7d795f),
+        ]);
+      }
+      if (cell === 'S') {
+        this.add.rectangle(px, py, TILE - 2, TILE - 2, 0x2a6c5e).setStrokeStyle(1, 0x8dccb5);
+        this.label(px, py, 'S', '#b4e2cd', 20);
+      }
+      if (cell === 'E') {
+        this.add.rectangle(px, py, 36, 40, 0x4b9166).setStrokeStyle(2, 0xc2e8b5);
+        this.label(px, py, 'EXIT', '#e0f4c2', 10);
       }
     }));
 
-    this.player = this.add.rectangle(this.spawn.x, this.spawn.y, 20, 20, 0xede4bd)
+    this.player = this.add.rectangle(this.session.player.x, this.session.player.y, 18, 18, 0xede4bd)
       .setStrokeStyle(2, 0x302c1a).setDepth(2);
-    this.physics.add.existing(this.player);
-    this.player.body.setCollideWorldBounds(true);
-    this.physics.add.collider(this.player, walls);
-    this.physics.add.overlap(this.player, this.exit, () => {
-      if (this.won) return;
-      this.won = true;
-      this.player.body.setVelocity(0, 0);
-      this.physics.pause();
-      status.textContent = '你找到了出口。這裡真的是出口嗎？按 R 再玩一次。';
-      this.add.text(480, 288, 'LEVEL 0 COMPLETE', {
-        fontFamily: 'monospace', fontSize: '30px', color: '#eee6ba',
-        backgroundColor: '#171710', padding: { x: 24, y: 16 },
-      }).setOrigin(0.5).setScrollFactor(0).setDepth(20);
-    });
+    this.monster = this.add.container(0, 0, [
+      this.add.rectangle(0, 0, 24, 24, 0x1b1010).setStrokeStyle(2, 0xb84339),
+      this.add.rectangle(-5, -4, 4, 4, 0xffbf83),
+      this.add.rectangle(5, -4, 4, 4, 0xffbf83),
+    ]).setDepth(3).setVisible(false);
+    this.cameras.main.setBounds(0, 0, MAP[0].length * TILE, MAP.length * TILE);
+    this.cameras.main.startFollow(this.player, true);
 
-    this.cursors = this.input.keyboard.createCursorKeys();
-    this.keys = this.input.keyboard.addKeys('W,A,S,D,SHIFT,R');
-    this.direction = new Phaser.Math.Vector2();
-    const camera = this.cameras.main;
-    camera.setBounds(0, 0, width, height);
-    camera.startFollow(this.player, true);
-
-    // 預先產生漸層遮罩，每幀只移動位置，避免每幀重畫整張材質。
-    // 這是圓形視野效果；牆壁尚未遮擋光線。
+    // 圓形漸層視野；此版本尚未實作牆壁遮光。
     if (!this.textures.exists('darkness')) {
       const size = 2048;
       const texture = this.textures.createCanvas('darkness', size, size);
       const ctx = texture.context;
-      const gradient = ctx.createRadialGradient(size / 2, size / 2, 45, size / 2, size / 2, 190);
-      gradient.addColorStop(0, 'rgba(0, 0, 0, 0)');
-      gradient.addColorStop(0.65, 'rgba(0, 0, 0, 0.45)');
-      gradient.addColorStop(1, 'rgba(0, 0, 0, 0.98)');
+      const gradient = ctx.createRadialGradient(size / 2, size / 2, 50, size / 2, size / 2, 225);
+      gradient.addColorStop(0, 'rgba(0,0,0,0)');
+      gradient.addColorStop(0.7, 'rgba(0,0,0,0.40)');
+      gradient.addColorStop(1, 'rgba(0,0,0,0.98)');
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, size, size);
       texture.refresh();
     }
     this.darkness = this.add.image(this.player.x, this.player.y, 'darkness').setDepth(10);
+    this.renderState();
   }
 
-  update() {
+  renderState() {
+    const state = this.session;
+    this.player.setPosition(state.player.x, state.player.y);
+    this.darkness.setPosition(state.player.x, state.player.y);
+    this.keyMarker.setVisible(!state.hasKey);
+    this.paper.setAlpha(state.documentAnswered ? 0.35 : 1);
+    this.monster.setVisible(state.monsterActive).setPosition(state.monster.x, state.monster.y);
+    for (const [door, open] of [[this.lockDoor, state.lockOpen], [this.questionGate, state.gateOpen]]) {
+      door.block.setAlpha(open ? 0.15 : 1);
+      door.label.setText(open ? 'OPEN' : door === this.lockDoor ? 'LOCK' : 'GATE');
+    }
+    if (state.respawns !== this.lastRespawns) {
+      this.lastRespawns = state.respawns;
+      this.cameras.main.flash(180, 116, 41, 20);
+    }
+    if (state.won && !this.finished) {
+      this.finished = true;
+      this.add.text(480, 288, 'LEVEL 0 COMPLETE\n\n按 R 重新開始', {
+        fontFamily: 'monospace', fontSize: '26px', align: 'center', color: '#eee6ba',
+        backgroundColor: '#171710', padding: { x: 28, y: 24 },
+      }).setOrigin(0.5).setScrollFactor(0).setDepth(20);
+    }
+    ui.sync();
+    audio.update(state);
+  }
+
+  update(_time, delta) {
+    if (this.session.modal) return;
     if (Phaser.Input.Keyboard.JustDown(this.keys.R)) {
+      this.input.keyboard.resetKeys();
       this.scene.restart();
       return;
     }
-    if (this.won) return;
-
-    const x = Number(this.keys.D.isDown || this.cursors.right.isDown)
-      - Number(this.keys.A.isDown || this.cursors.left.isDown);
-    const y = Number(this.keys.S.isDown || this.cursors.down.isDown)
-      - Number(this.keys.W.isDown || this.cursors.up.isDown);
-    const speed = this.keys.SHIFT.isDown ? RUN_SPEED : WALK_SPEED;
-    // 正規化方向向量，避免斜走比直走更快。速度單位是 pixels/second。
-    this.direction.set(x, y).normalize().scale(speed);
-    this.player.body.setVelocity(this.direction.x, this.direction.y);
-    this.darkness.setPosition(this.player.x, this.player.y);
+    const x = Number(this.keys.D.isDown || this.cursors.right.isDown) - Number(this.keys.A.isDown || this.cursors.left.isDown);
+    const y = Number(this.keys.S.isDown || this.cursors.down.isDown) - Number(this.keys.W.isDown || this.cursors.up.isDown);
+    this.session.update(delta, { x, y, sprint: this.keys.SHIFT.isDown });
+    this.renderState();
   }
 }
 
@@ -125,10 +217,9 @@ const game = new Phaser.Game({
   height: 576,
   backgroundColor: '#15150f',
   pixelArt: true,
-  physics: { default: 'arcade', arcade: { gravity: { x: 0, y: 0 }, debug: false } },
+  audio: { noAudio: true },
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
   scene: [Backrooms],
 });
 
-// 修改檔案時銷毀舊遊戲，避免開發期間累積多個 canvas 與鍵盤事件。
-if (import.meta.hot) import.meta.hot.dispose(() => game.destroy(true));
+if (import.meta.hot) import.meta.hot.dispose(() => { ui.close(); audio.destroy(); game.destroy(true); });
