@@ -1,0 +1,13 @@
+:root {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: #d9ce94;
+  background: #12120e;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; }
+main { width: min(960px, 96vw); padding: 24px 0; }
+header { display: flex; justify-content: space-between; margin-bottom: 14px; letter-spacing: 0.22em; font-size: 13px; }
+#game { width: 100%; aspect-ratio: 5 / 3; overflow: hidden; border: 1px solid #524d30; }
+canvas { display: block; }
+p { line-height: 1.8; font-size: 13px; color: #b5ad8b; }
