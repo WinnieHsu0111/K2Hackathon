@@ -1,19 +1,20 @@
 """
 Decision loop for K2-plays-the-game mode.
 
-Takes the frontend's live game state and streams the multi-agent reasoning,
-ending with a high-level DECISION (intent) the frontend executes via BFS.
+The Supervisor is the main agent. It orchestrates three specialist agents
+(explorer, survival, navigator) via tool calling — it decides which agents
+to call, and how many, each turn — then outputs a final intent for the frontend
+to execute via BFS pathfinding.
 """
 
 from __future__ import annotations
 
 import json
-import textwrap
 from typing import AsyncGenerator
 
 from pydantic import BaseModel
 
-from .base import K2_MODEL, get_client, sse_event, SHARED_PROMPT
+from .base import K2_MODEL, get_client, sse_event, SHARED_PROMPT, load_prompt
 
 VALID_INTENTS = ["GO_KEY", "GO_LOCK", "GO_DOCUMENT", "ANSWER", "GO_SAFE", "GO_EXIT"]
 
@@ -23,6 +24,7 @@ class GameState(BaseModel):
     lockOpen: bool = False
     gateOpen: bool = False
     documentAnswered: bool = False
+    atDocument: bool = False  # is the player standing at the document?
     monsterActive: bool = False
     playerInSafeZone: bool = False
     monsterState: str = "PATROL"
@@ -31,35 +33,54 @@ class GameState(BaseModel):
     question: dict | None = None
 
 
-DECIDER_PROMPT = SHARED_PROMPT + "\n\n" + textwrap.dedent("""
-You are the Navigator deciding the character's next high-level intent in a
-Backrooms escape game. You control the player by choosing ONE intent; the game
-engine handles the actual movement via pathfinding.
+# Specialist agent prompts (edit these + shared.txt for prompt engineering)
+EXPLORER_GAME = SHARED_PROMPT + "\n\n" + load_prompt("game_explorer")
+SURVIVAL_GAME = SHARED_PROMPT + "\n\n" + load_prompt("game_survival")
+NAVIGATOR_GAME = SHARED_PROMPT + "\n\n" + load_prompt("game_navigator")
+SUPERVISOR_GAME = SHARED_PROMPT + "\n\n" + load_prompt("game_supervisor")
 
-Available intents:
-- GO_KEY: walk to and pick up the key (needed before the code door)
-- GO_LOCK: walk to the code door and open it (requires the key)
-- GO_DOCUMENT: walk to the document to read the puzzle
-- ANSWER: answer the puzzle (provide answerId: A, B, or C)
-- GO_SAFE: flee to the nearest safe zone (use when the monster is chasing)
-- GO_EXIT: walk to the final exit (only after the gate is open)
+MAX_TURNS = 6  # cap tool-calling rounds so we always return a decision
 
-Decision priorities:
-1. If the monster is actively chasing and you are NOT in a safe zone → GO_SAFE
-2. If you don't have the key yet → GO_KEY
-3. If you have the key but the code door is not open → GO_LOCK
-4. If the door is open but the puzzle isn't answered → GO_DOCUMENT, then ANSWER
-5. If the gate is open and puzzle answered → GO_EXIT
 
-When choosing ANSWER, use the puzzle rule to deduce which option is the anomaly.
+# Tools the Supervisor can call
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "call_explorer",
+            "description": "Observe and describe the current situation.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "call_survival",
+            "description": "Assess the monster threat and how urgent fleeing is.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "call_navigator",
+            "description": "Propose a concrete next action with reasoning.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+]
 
-Respond ONLY with valid JSON:
-{
-  "intent": "<one of the intents>",
-  "answerId": "<A/B/C, or null if intent is not ANSWER>",
-  "reasoning": "<one sentence explaining why>"
-}
-""").strip()
+
+async def _ask(system: str, user: str) -> str:
+    client = get_client()
+    r = await client.chat.completions.create(
+        model=K2_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
+    return r.choices[0].message.content.strip()
 
 
 def _state_summary(state: GameState) -> str:
@@ -68,6 +89,7 @@ def _state_summary(state: GameState) -> str:
         f"Code door open: {state.lockOpen}",
         f"Gate open: {state.gateOpen}",
         f"Puzzle answered: {state.documentAnswered}",
+        f"Player is at the document: {state.atDocument}",
         f"Monster active: {state.monsterActive} (state: {state.monsterState})",
         f"Player in safe zone: {state.playerInSafeZone}",
         f"Player position: {state.playerTile}",
@@ -80,37 +102,145 @@ def _state_summary(state: GameState) -> str:
     return "\n".join(lines)
 
 
-async def decide(state: GameState) -> AsyncGenerator[str, None]:
-    client = get_client()
-    summary = _state_summary(state)
+async def _run_tool(name: str, summary: str) -> str:
+    """Run a specialist agent and return its text output."""
+    if name == "call_explorer":
+        return await _ask(EXPLORER_GAME, f"Current game state:\n{summary}")
+    if name == "call_survival":
+        return await _ask(SURVIVAL_GAME, f"Current game state:\n{summary}")
+    if name == "call_navigator":
+        return await _ask(NAVIGATOR_GAME, f"Current game state:\n{summary}\n\nPropose the next action.")
+    return f"Unknown tool: {name}"
 
-    yield sse_event("agent_thinking", agent="Navigator", message="Reading game state...")
 
-    r = await client.chat.completions.create(
-        model=K2_MODEL,
-        messages=[
-            {"role": "system", "content": DECIDER_PROMPT},
-            {"role": "user", "content": f"Current game state:\n{summary}\n\nDecide the next intent."},
-        ],
-    )
-    content = r.choices[0].message.content.strip()
+_AGENT_LABEL = {
+    "call_explorer": ("Explorer", "Observing the environment..."),
+    "call_survival": ("Survival", "Assessing the threat..."),
+    "call_navigator": ("Navigator", "Proposing an action..."),
+}
 
-    # Strip markdown fences
+
+def _rule_based_intent(state: GameState) -> dict:
+    """Deterministic fallback: pick the correct intent straight from the state,
+    following the same priority order the agents use. Used when the LLM's JSON
+    can't be parsed, so the game never stalls."""
+    if state.monsterActive and state.monsterState == "CHASE" and not state.playerInSafeZone:
+        return {"intent": "GO_SAFE", "answerId": None, "reasoning": "(rule) Monster chasing — flee to safe zone."}
+    if not state.hasKey:
+        return {"intent": "GO_KEY", "answerId": None, "reasoning": "(rule) No key yet — go get it."}
+    if not state.lockOpen:
+        return {"intent": "GO_LOCK", "answerId": None, "reasoning": "(rule) Have key, door closed — open it."}
+    if not state.documentAnswered and not state.atDocument:
+        return {"intent": "GO_DOCUMENT", "answerId": None, "reasoning": "(rule) Door open — go to the document."}
+    if not state.documentAnswered and state.atDocument:
+        answer = _deduce_answer(state)
+        return {"intent": "ANSWER", "answerId": answer, "reasoning": "(rule) At document — answer the puzzle."}
+    if state.gateOpen and state.documentAnswered:
+        return {"intent": "GO_EXIT", "answerId": None, "reasoning": "(rule) Puzzle done — head to the exit."}
+    return {"intent": "GO_KEY", "answerId": None, "reasoning": "(rule) Default."}
+
+
+def _deduce_answer(state: GameState) -> str | None:
+    """Best-effort: if the puzzle rule is 'odd', pick the even option, etc.
+    Falls back to the first option if we can't tell."""
+    if not state.question:
+        return "A"
+    opts = state.question.get("options", [])
+    rule = (state.question.get("rule") or "").lower()
+    if "odd" in rule or "奇" in rule:
+        for o in opts:
+            try:
+                if int(o["value"]) % 2 == 0:
+                    return o["id"]
+            except (ValueError, KeyError):
+                pass
+    if "even" in rule or "偶" in rule:
+        for o in opts:
+            try:
+                if int(o["value"]) % 2 == 1:
+                    return o["id"]
+            except (ValueError, KeyError):
+                pass
+    return opts[0]["id"] if opts else "A"
+
+
+def _parse_decision(content: str, state: GameState) -> dict:
     if content.startswith("```"):
         content = content.split("```")[1]
         if content.startswith("json"):
             content = content[4:]
     content = content.strip()
-
+    # Try to find a JSON object even if there's surrounding prose.
+    if not content.startswith("{") and "{" in content:
+        content = content[content.index("{"):content.rindex("}") + 1]
     try:
-        decision = json.loads(content)
+        return json.loads(content)
     except Exception:
-        decision = {"intent": "GO_KEY", "answerId": None, "reasoning": "Fallback: could not parse decision."}
+        return _rule_based_intent(state)
 
+
+async def decide(state: GameState) -> AsyncGenerator[str, None]:
+    client = get_client()
+    summary = _state_summary(state)
+
+    messages = [
+        {"role": "system", "content": SUPERVISOR_GAME},
+        {"role": "user", "content": f"Current game state:\n{summary}\n\nDecide the next intent. Call agents as needed."},
+    ]
+
+    yield sse_event("agent_thinking", agent="Supervisor", message="Deciding which agents to consult...")
+
+    for _turn in range(MAX_TURNS):
+        r = await client.chat.completions.create(
+            model=K2_MODEL,
+            messages=messages,
+            tools=TOOLS,
+            tool_choice="auto",
+        )
+        msg = r.choices[0].message
+
+        # No tool call → Supervisor is giving the final decision
+        if not msg.tool_calls:
+            decision = _parse_decision(msg.content or "", state)
+            intent = decision.get("intent", "GO_KEY")
+            if intent not in VALID_INTENTS:
+                decision = _rule_based_intent(state)
+                intent = decision["intent"]
+            yield sse_event(
+                "decision",
+                intent=intent,
+                answerId=decision.get("answerId"),
+                reasoning=decision.get("reasoning", ""),
+            )
+            return
+
+        # Execute each tool the Supervisor called
+        messages.append(msg.model_dump(exclude_unset=True))
+        for tc in msg.tool_calls:
+            name = tc.function.name
+            label, thinking = _AGENT_LABEL.get(name, ("Agent", "Working..."))
+            yield sse_event("agent_thinking", agent=label, message=thinking)
+
+            output = await _run_tool(name, summary)
+            yield sse_event("agent_result", agent=label, content=output)
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": output,
+            })
+
+    # Hit the turn cap without a final decision — ask once more, plainly
+    yield sse_event("agent_thinking", agent="Supervisor", message="Finalizing decision...")
+    final = await _ask(
+        SUPERVISOR_GAME,
+        f"Current game state:\n{summary}\n\nOutput your final decision JSON now.",
+    )
+    decision = _parse_decision(final, state)
     intent = decision.get("intent", "GO_KEY")
     if intent not in VALID_INTENTS:
-        intent = "GO_KEY"
-
+        decision = _rule_based_intent(state)
+        intent = decision["intent"]
     yield sse_event(
         "decision",
         intent=intent,
