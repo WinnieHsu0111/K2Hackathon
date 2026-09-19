@@ -2,20 +2,9 @@
 
 from __future__ import annotations
 
-import textwrap
+from .base import K2_MODEL, get_client, SHARED_PROMPT, load_prompt
 
-from .base import K2_MODEL, get_client
-
-SURVIVAL_PROMPT = textwrap.dedent("""
-You are the Survival Instinct agent in a Backrooms survival game.
-Your job: assess danger levels for each possible action.
-Given the explorer's observations, identify:
-- What is dangerous and why
-- What seems safe
-- What is unknown/uncertain
-Be paranoid. The Backrooms is deadly. Better to be overly cautious.
-Do NOT decide what to do — only assess risk.
-""").strip()
+SURVIVAL_PROMPT = SHARED_PROMPT + "\n\n" + load_prompt("survival")
 
 
 async def call_survival(room: dict, explorer_output: str) -> str:

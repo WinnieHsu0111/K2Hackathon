@@ -4,11 +4,22 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
 load_dotenv()
+
+PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+
+
+def load_prompt(name: str) -> str:
+    """Load a prompt file from the prompts/ directory (without .txt)."""
+    return (PROMPTS_DIR / f"{name}.txt").read_text().strip()
+
+
+SHARED_PROMPT = load_prompt("shared")
 
 K2_API_KEY = os.getenv("K2_API_KEY", "")
 K2_BASE_URL = os.getenv("K2_BASE_URL", "https://api.ifm.ai/v1")

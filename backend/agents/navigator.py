@@ -2,25 +2,9 @@
 
 from __future__ import annotations
 
-import textwrap
+from .base import K2_MODEL, get_client, SHARED_PROMPT, load_prompt
 
-from .base import K2_MODEL, get_client
-
-NAVIGATOR_PROMPT = textwrap.dedent("""
-You are the Navigator agent in a Backrooms survival game.
-Your job: decide the single best action to take right now.
-You will receive:
-- Explorer's observations
-- Survival's risk assessment
-- Memory of past failures
-
-Based on all this, choose ONE specific action and explain your reasoning.
-Your action must be concrete and specific (e.g. "read the crumpled note", "enter code 1984 on the keypad").
-
-Format your response EXACTLY like this:
-ACTION: <your chosen action>
-REASONING: <why>
-""").strip()
+NAVIGATOR_PROMPT = SHARED_PROMPT + "\n\n" + load_prompt("navigator")
 
 
 async def call_navigator(

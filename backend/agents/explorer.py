@@ -2,17 +2,9 @@
 
 from __future__ import annotations
 
-import textwrap
+from .base import K2_MODEL, get_client, SHARED_PROMPT, load_prompt
 
-from .base import K2_MODEL, get_client
-
-EXPLORER_PROMPT = textwrap.dedent("""
-You are the Explorer agent in a Backrooms survival game.
-Your job: carefully observe the environment and identify ALL clues and items.
-Be methodical. List every object, sound, smell, and visual detail.
-Do NOT make decisions or recommendations — only report what you observe.
-Format your response as a clear list of observations.
-""").strip()
+EXPLORER_PROMPT = SHARED_PROMPT + "\n\n" + load_prompt("explorer")
 
 
 async def call_explorer(room: dict) -> str:
