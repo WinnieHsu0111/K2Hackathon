@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
-import { GameSession, MAP, TILE, DOOR_CODE, QUESTION, MONSTER_STATE, LIGHTS, LIGHT_COLORS } from './level.js';
+import { GameSession, MAP, TILE, MONSTER_STATE, LIGHTS, LIGHT_COLORS } from './level.js';
 import { createThreatAudio } from './audio.js';
 import './style.css';
+import { SYMBOLS } from './puzzles.js';
 import { createAgentPanel } from './agent-panel.js';
 
 const byId = (id) => document.getElementById(id);
@@ -11,87 +12,88 @@ class GameUI {
   constructor() {
     this.dialog = byId('interaction');
     this.currentModal = null;
-    byId('question-rule').textContent = QUESTION.rule;
-    byId('question-prompt').textContent = QUESTION.prompt;
-    byId('answers').replaceChildren(...QUESTION.options.map((option) => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = `${option.id}.  ${option.value}`;
-      button.onclick = () => { this.onManual?.(); this.session.answer(option.id); this.close(); };
-      return button;
-    }));
     byId('lock-form').onsubmit = (event) => {
-      event.preventDefault();
-      this.onManual?.();
+      event.preventDefault(); this.onManual?.();
       if (this.session.unlock(byId('door-code').value)) this.close();
-      else {
-        byId('lock-error').textContent = 'Incorrect code. Check the three digits on the key tag again.';
-        byId('door-code').select();
-      }
+      else { byId('lock-error').textContent = 'ACCESS DENIED. Check the four-digit code on your key.'; byId('door-code').select(); }
     };
     byId('close-dialog').onclick = () => { this.onManual?.(); this.close(); };
     byId('replay-lights').onclick = () => { this.onManual?.(); this.session.playLightSequence(); };
     this.dialog.oncancel = (event) => { event.preventDefault(); this.onManual?.(); this.close(); };
+    byId('start-game').onclick = () => this.session.start();
+    byId('restart-dialog').onclick = () => this.onRestart?.();
+    byId('light-input').replaceChildren(...Object.entries(LIGHTS).map(([id, color]) => {
+      const button = document.createElement('button');
+      button.type = 'button'; button.textContent = `${id} ${color}`;
+      button.onclick = () => this.session.pressLight(Number(id));
+      return button;
+    }));
   }
-
   bind(session, keyboard) {
-    this.close();
-    this.session = session;
-    this.keyboard = keyboard;
+    this.close(); this.session = session; this.keyboard = keyboard;
+    const question = session.question;
+    byId('question-rule').textContent = question.rule;
+    byId('question-prompt').textContent = question.prompt;
+    byId('answers').replaceChildren(...question.options.map((option) => {
+      const button = document.createElement('button'); button.type = 'button';
+      button.textContent = `${option.id}. ${option.value}`;
+      button.onclick = () => { this.onManual?.(); if (session.answer(option.id)) this.close(); };
+      return button;
+    }));
+    byId('memory-answers').replaceChildren(...session.memoryOptions.map((sequence, index) => {
+      const button = document.createElement('button'); button.type = 'button';
+      button.textContent = sequence.map((item) => SYMBOLS[item]).join('  ');
+      button.setAttribute('aria-label', sequence.join(', '));
+      button.onclick = () => session.answerMemory(index);
+      return button;
+    }));
   }
-
   close() {
     this.session?.dismiss();
     if (this.dialog.open) this.dialog.close();
     this.currentModal = null;
-    if (this.keyboard) {
-      this.keyboard.resetKeys();
-      this.keyboard.enabled = true;
-    }
+    if (this.keyboard) { this.keyboard.resetKeys(); this.keyboard.enabled = true; }
   }
-
   sync() {
-    const session = this.session;
-    updateText(byId('status'), session.message);
-    updateText(byId('inventory'), !session.firstGateOpen ? `LIGHT CODE ${session.lightInput.length}/4` : session.hasKey ? `KEY ✓  /  CODE ${DOOR_CODE}` : 'KEY —');
+    const s = this.session;
+    updateText(byId('status'), s.message);
+    const time = `${(s.timeLeft / 1000).toFixed(1)}s`;
+    updateText(byId('timer'), time); updateText(byId('dialog-timer'), `TIME LEFT ${time}`);
+    byId('timer').dataset.urgent = String(s.timeLeft <= 15000);
+    byId('start-screen').hidden = s.started;
+    updateText(byId('inventory'), !s.firstGateOpen ? `LIGHT CODE ${s.lightInput.length}/5`
+      : !s.memorySolved ? 'MEMORY ROOM' : !s.pathSolved ? 'CHOOSE A PATH' : s.hasKey ? `KEY ✓ / CODE ${s.doorCode}` : 'FIND THE KEY');
     let threat = 'No threats detected';
-    if (session.won) threat = 'Escaped successfully';
-    else if (session.monsterActive) {
-      if (session.playerInSafeZone) threat = 'Safe zone · Monster on patrol';
-      else if (session.wakeRemaining > 0) threat = 'Anomaly awakening · Move away from the doorway now';
-      else if (session.monster.state === MONSTER_STATE.CHASE) threat = 'Spotted · Head to the safe zone';
-      else if (session.monster.state === MONSTER_STATE.SEARCH) threat = 'Monster searching · Stay hidden';
-      else threat = 'Monster patrolling · Stay out of sight';
-    } else if (session.playerInSafeZone) threat = 'Safe zone';
+    if (s.dead) threat = 'YOU DIED';
+    else if (s.won) threat = 'YOU ESCAPED';
+    else if (s.monsterActive) threat = s.playerInSafeZone ? 'Safe zone · Monster on patrol' : `Monster: ${s.monster.state}`;
     updateText(byId('threat'), threat);
-    byId('threat').dataset.active = String(session.monsterActive && !session.playerInSafeZone && session.monster.state === MONSTER_STATE.CHASE);
-
-    if (!session.modal && this.currentModal) this.close();
-    if (session.modal && this.currentModal !== session.modal) {
-      this.currentModal = session.modal;
-      const isLock = session.modal === 'lock';
-      const isLight = session.modal === 'lights';
-      byId('lock-panel').hidden = !isLock;
-      byId('document-panel').hidden = isLock || isLight;
-      byId('light-panel').hidden = !isLight;
-      byId('dialog-title').textContent = isLight ? 'Memorize the light sequence' : isLock ? 'Enter the code' : `FILE #${QUESTION.id}`;
-      byId('dialog-label').textContent = isLight ? 'LIGHT CODE / FIRST GATE' : isLock ? 'ACCESS CONTROL / LOCKED' : 'RECOVERED DOCUMENT';
-      byId('lock-error').textContent = '';
-      byId('door-code').value = '';
-      this.keyboard.resetKeys();
-      this.keyboard.enabled = false;
+    byId('threat').dataset.active = String(s.monsterActive && !s.playerInSafeZone);
+    if (!s.modal && this.currentModal) this.close();
+    if (s.modal && this.currentModal !== s.modal) {
+      this.currentModal = s.modal;
+      for (const name of ['lock', 'light', 'document', 'memory']) byId(`${name}-panel`).hidden = s.modal !== (name === 'light' ? 'lights' : name);
+      const titles = { lights: 'Remember five lights', lock: 'Enter the code', document: 'CALCULUS FILE', memory: 'Remember five symbols' };
+      byId('dialog-title').textContent = titles[s.modal];
+      byId('dialog-label').textContent = 'THE CLOCK IS RUNNING';
+      byId('lock-error').textContent = ''; byId('door-code').value = '';
+      this.keyboard.resetKeys(); this.keyboard.enabled = false;
       this.dialog.showModal();
-      if (isLock) byId('door-code').focus();
-      else if (isLight) byId('close-dialog').focus();
-      else byId('answers').querySelector('button').focus();
+      if (s.modal === 'lock') byId('door-code').focus(); else byId('close-dialog').focus();
     }
-    if (session.modal === 'lights') {
-      updateText(byId('light-playback-status'), session.lightNotice);
-      updateText(byId('light-current'), session.activeLight ? `${session.activeLight} · ${LIGHTS[session.activeLight]}` : '—');
-      for (const light of document.querySelectorAll('[data-light]')) light.classList.toggle('lit', Number(light.dataset.light) === session.activeLight);
-      byId('replay-lights').disabled = session.lightPhase === 'playback';
+    if (s.modal === 'lights') {
+      updateText(byId('light-playback-status'), s.lightNotice);
+      updateText(byId('light-current'), s.lightPhase === 'input' ? `INPUT ${s.lightInput.length}/5` : s.activeLight ? `${s.activeLight} · ${LIGHTS[s.activeLight]}` : '—');
+      for (const light of document.querySelectorAll('[data-light]')) light.classList.toggle('lit', Number(light.dataset.light) === s.activeLight);
+      for (const button of byId('light-input').children) button.disabled = s.lightPhase !== 'input';
+      byId('replay-lights').disabled = s.lightPhase === 'playback';
     }
-    byId('close-dialog').textContent = session.modal === 'lights' && session.lightPhase === 'input' ? 'Return to the room and enter the sequence →' : 'Leave for now · ESC';
+    const revealing = s.memoryPhase === 'reveal';
+    byId('memory-preview').textContent = revealing ? s.memorySequence.map((item) => SYMBOLS[item]).join('  ') : 'Symbols hidden';
+    byId('memory-preview').setAttribute('aria-label', revealing ? s.memorySequence.join(', ') : 'Symbols hidden');
+    byId('memory-answers').hidden = revealing;
+    byId('memory-notice').textContent = revealing ? `Memorize the order · ${(s.memoryRemaining/1000).toFixed(1)}s` : 'Choose the order you saw. A wrong answer replays the symbols.';
+    byId('close-dialog').textContent = 'Return to room · ESC';
   }
 }
 
@@ -105,15 +107,21 @@ class Backrooms extends Phaser.Scene {
     return this.add.text(x, y, text, { fontFamily: 'monospace', fontSize: `${size}px`, color }).setOrigin(0.5);
   }
 
-  create() {
+  create(data = {}) {
     this.session = new GameSession();
+    if (data.autoStart) this.session.start();
+    this.lastClock = performance.now();
+    this.deathShownAt = null;
+    this.memoryMarkers = [];
+    this.memoryGates = [];
     this.lastRespawns = 0;
     this.finished = false;
     this.cursors = this.input.keyboard.createCursorKeys();
     this.keys = this.input.keyboard.addKeys('W,A,S,D,SHIFT,R,F');
     this.lightButtons = {};
     ui.bind(this.session, this.input.keyboard);
-    this.agentPanel = createAgentPanel(this.session, () => this.scene.restart());
+    this.agentPanel = createAgentPanel(this.session, () => this.scene.restart({ autoStart: true }));
+    ui.onRestart = () => this.scene.restart({ autoStart: true });
     ui.onManual = () => { if (this.agentPanel.controller.active) this.agentPanel.controller.pause('Manual interaction has taken over.'); };
     byId('backend-url').onfocus = () => { this.input.keyboard.resetKeys(); this.input.keyboard.enabled = false; };
     byId('backend-url').onblur = () => { this.input.keyboard.resetKeys(); this.input.keyboard.enabled = !this.session.modal; };
@@ -136,6 +144,19 @@ class Backrooms extends Phaser.Scene {
         this.add.rectangle(px, py, 36, 32, 0x253d3a).setStrokeStyle(2, 0x8abcb0);
         this.label(px, py - 2, 'C', '#d8eee4', 18);
         this.label(px, py + 21, 'F · PLAY', '#b9d7c6', 8);
+      }
+      if (cell === 'B') {
+        const marker = this.label(px, py, '?', '#b8d8c9', 26);
+        this.memoryMarkers.push(marker);
+      }
+      if (cell === 'R') {
+        this.add.rectangle(px, py, 36, 32, 0x253d3a).setStrokeStyle(2, 0x8abcb0);
+        this.label(px, py, 'R', '#d8eee4', 18);
+        this.label(px, py + 23, 'F · MEMORY', '#b9d7c6', 8);
+      }
+      if (y === 9 && [4,12,20].includes(x)) {
+        this.memoryGates.push(this.add.rectangle(px, py, TILE-4, TILE-4, 0x404637).setStrokeStyle(2, 0x8abcb0));
+        this.label(px, py-30, ['LEFT','CENTER','RIGHT'][[4,12,20].indexOf(x)], '#e0d4a0', 10);
       }
       if (cell === 'K') {
         this.keyMarker = this.add.container(px, py, [
@@ -197,6 +218,17 @@ class Backrooms extends Phaser.Scene {
       texture.refresh();
     }
     this.darkness = this.add.image(this.player.x, this.player.y, 'darkness').setDepth(10);
+    if (!this.textures.exists('static-noise')) {
+      const noise = this.textures.createCanvas('static-noise', 160, 96);
+      const pixels = noise.context.createImageData(160, 96);
+      for (let i = 0; i < pixels.data.length; i += 4) {
+        const shade = Math.floor(Math.random() * 256);
+        pixels.data[i] = pixels.data[i+1] = pixels.data[i+2] = shade;
+        pixels.data[i+3] = 180;
+      }
+      noise.context.putImageData(pixels, 0, 0); noise.refresh();
+    }
+    this.staticOverlay = this.add.image(480, 288, 'static-noise').setDisplaySize(960, 576).setScrollFactor(0).setDepth(19).setAlpha(0);
     this.renderState();
   }
 
@@ -215,13 +247,19 @@ class Backrooms extends Phaser.Scene {
       const active = Number(id) === state.activeLight;
       light.bulb.setAlpha(active ? 1 : 0.5).setScale(active ? 1.15 : 1);
     }
+    this.memoryGates.forEach((gate) => gate.setAlpha(state.memorySolved ? 0 : 1));
+    this.memoryMarkers.forEach((marker, i) => marker.setText(state.memoryPhase === 'reveal' ? SYMBOLS[state.memorySequence[i]] : '?'));
     if (state.respawns !== this.lastRespawns) {
+      this.cameras.main.shake(220, 0.012);
+      this.tweens.killTweensOf(this.staticOverlay);
+      this.staticOverlay.setAlpha(0.75);
+      this.tweens.add({ targets: this.staticOverlay, alpha: 0, duration: 250 });
       this.lastRespawns = state.respawns;
       this.cameras.main.flash(180, 116, 41, 20);
     }
-    if (state.won && !this.finished) {
+    if (state.gameOver && !this.finished) {
       this.finished = true;
-      this.add.text(480, 288, 'LEVEL 0 COMPLETE\n\nPress R to restart', {
+      this.add.text(480, 288, state.dead ? `YOU DIED\n${state.deathReason}\n\nNew session in 2 seconds` : 'YOU ESCAPED\n\nPress R to restart', {
         fontFamily: 'monospace', fontSize: '26px', align: 'center', color: '#eee6ba',
         backgroundColor: '#171710', padding: { x: 28, y: 24 },
       }).setOrigin(0.5).setScrollFactor(0).setDepth(20);
@@ -232,7 +270,18 @@ class Backrooms extends Phaser.Scene {
   }
 
   update(_time, delta) {
+    const now = performance.now();
+    this.session.advanceTime(now - this.lastClock);
+    this.lastClock = now;
     const agent = this.agentPanel.controller;
+    if (this.session.dead) {
+      if (agent.active) agent.pause('Run ended. New session incoming.');
+      this.deathShownAt ??= now;
+      this.renderState();
+      if (now - this.deathShownAt >= 2000) this.scene.restart({ autoStart: true });
+      return;
+    }
+    if (!this.session.started) { this.renderState(); return; }
     const typing = document.activeElement?.matches('input, textarea');
     const humanInput = !typing && this.input.keyboard.enabled &&
       [this.keys.W, this.keys.A, this.keys.S, this.keys.D, this.keys.F, this.keys.R,
@@ -247,7 +296,7 @@ class Backrooms extends Phaser.Scene {
     }
     if (Phaser.Input.Keyboard.JustDown(this.keys.R)) {
       this.input.keyboard.resetKeys();
-      this.scene.restart();
+      this.scene.restart({ autoStart: true });
       return;
     }
     if (Phaser.Input.Keyboard.JustDown(this.keys.F)) this.session.interact();

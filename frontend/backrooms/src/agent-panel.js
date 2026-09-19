@@ -34,11 +34,11 @@ export function createAgentPanel(session, restart) {
   el('ai-pause').onclick = () => controller.pause();
   el('dialog-ai-pause').onclick = () => controller.pause();
   el('ai-reset').onclick = () => { controller.pause(); restart(); };
-  notify({ status: 'Solve the light puzzle to open door A before letting K2 take over.' });
+  notify({ status: 'Complete the lights, memory room, and path puzzle before letting K2 take over.' });
   return {
     controller,
     sync() {
-      const disabled = controller.busy || controller.route.length > 0 || session.won || !session.firstGateOpen;
+      const disabled = controller.busy || controller.route.length > 0 || session.gameOver || !session.aiReady;
       el('ai-step').disabled = disabled || controller.running;
       el('dialog-ai-step').disabled = disabled || controller.running;
       el('ai-auto').disabled = disabled || controller.running;

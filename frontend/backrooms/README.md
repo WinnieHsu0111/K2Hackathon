@@ -1,80 +1,56 @@
-# Backrooms — File 042
+# Backrooms Escape — 60 Seconds
 
-K2Hackathon 的獨立 2D 遊戲前端，位置為 `frontend/backrooms/`。使用 Phaser 3.90、Vite 8、JavaScript。
+A standalone Phaser / Vite game in `frontend/backrooms`.
 
-## 啟動與檢查
-
-在 repository 根目錄執行：
+## Run
 
 ```sh
 cd frontend/backrooms
 npm ci
-npm run dev
+npm run dev -- --port 5173 --strictPort
 ```
 
-開啟終端機顯示的網址，預設 http://127.0.0.1:5173 。Node.js 建議使用目前 LTS，最低版本 22.12。
+Open http://127.0.0.1:5173. Node.js 22.12+ is required.
 
 ```sh
 npm test
 npm run build
 ```
 
-## 操作
+## Play
 
-- WASD／方向鍵移動，Shift 奔跑，R 重新開始。
-- 最前方是燈光記憶房。靠近 C 控制台按 F，觀看四次閃燈；播放完畢後返回房間，依序靠近 1–4 燈光按鈕並按 F。
-- 輸入滿四次才判定。答對會開啟 A 門；答錯會清空输入並重播。路過按鈕不會觸發；中途忘記可以回 C 重播。
-- 撿到金色鑰匙後，畫面會顯示鑰匙牌上的密碼。接近密碼门會自動顯示輸入視窗。
-- 踩到陷阱會回到密碼門外，鑰匙與已開啟的門保留。
-- 碰到文件即可選答。答對會開門；答錯也會開門，但怪物開始追蹤玩家。
-- 地圖有三個 2×2 藍綠色 S 安全區。角色全身進入後，怪物改去遠處巡邏，不會消失或停在門口守候。
-- 離開安全區後，怪物繼續巡邏；只有玩家進入 7 格偵測距離且視線未被牆、門或安全區擋住，才會再追逐。
-- 怪物失去玩家視線時，會前往最後看見的位置搜尋；3 秒後改回巡邏。
-- 答錯後有 1.2 秒甦醒時間，讓玩家能穿過 G 門、轉向掩護。
-- 可按「Jaws 距離音樂」播放兩秒確認音檔，之後依怪物距離調整音量。越接近怪物越大聲；進安全區不會突然靜音，而是隨怪物離開逐漸變小。
-- 被抓到會回到文件前，題目與 G 門重設，可重新作答。
-- 到達綠色 E 出口過關。
-- ESC 或「先離開」可關閉題目／密碼視窗；走離互動位置後重新接近，即可再次開啟。
+- Click **START** to begin a 60-second run. WASD / arrows move, Shift runs, F interacts, R restarts.
+- Approach **C** and press F. Watch five random flashes, then enter them using the console buttons. Repeated colors are allowed. Incorrect input replays the sequence.
+- Crossing gate **A** reveals five symbols for three seconds. At **R**, press F and choose the correct order. An incorrect choice reveals the symbols again. All three passage gates stay closed until solved.
+- Choose **LEFT / CENTER / RIGHT**. One corridor is randomly valid. The other two look normal but cause static and return you to the entrance. Time is not restored.
+- Find **K**. Its tag reveals the run's four-digit code. Enter that code at **L**.
+- Cross the row of **T** traps using the only one-tile gap. Contact sends you outside L without resetting progress or time.
+- At **D**, answer a generated calculus question: chain rule, substitution integration, limits, or polynomial derivatives. The three answer positions are shuffled.
+- Both answers open **G**. A wrong answer wakes the monster. Use the three **S** shelters to break sight and let it patrol away.
+- Reach **E** before the countdown ends to see **YOU ESCAPED**.
+- Timeout or capture shows **YOU DIED** for two seconds, then automatically starts a fresh randomized session. Manual restart also generates fresh values.
 
-## 檔案
+The clock continues during every dialog, retry, and K2 request. It uses elapsed wall-clock time, independent of the movement delta clamp; background time is deducted when rendering resumes. Winning freezes the clock. START prevents the initial run from expiring while you read the instructions.
 
-- `src/level.js`：地圖、速度、密碼、題目、碰撞、關卡狀態與怪物尋路。
-- `src/main.js`：Phaser 場景繪製、鍵盤與 HTML 視窗整合。
-- `src/audio.js`：由玩家主動啟用的距離音樂，使用 `src/assets/jaws.m4a`。
-- `index.html` / `src/style.css`：提示、密碼輸入框、文件選答。
-- `tests/game.test.js`：完整通關路線、分支、陷阱、追逐、安全區與檢查點驗證。
+## Music
 
-地圖符號：`#` 牆、`.` 地板、`P` 出生點、`1–4` 燈光按鈕、`C` 控制台、`A` 第一扇門、`K` 鑰匙、`L` 密碼門、`T` 陷阱、`D` 文件、`G` 題目門、`S` 安全區、`M` 怪物出生點、`E` 最終出口。
+Enable **Jaws music** to authorize browser playback. A two-second preview confirms the audio. When the monster appears, `src/assets/jaws.m4a` restarts and loops. Volume falls with distance over 15 tiles; sheltering lets it fade naturally as the monster leaves. Death, victory, and a hidden/unfocused tab silence playback. Keep the existing local audio asset and its usage permissions with the project.
 
-燈光顏色為 1 紅、2 藍、3 綠、4 黃；固定順序是 `2 → 4 → 1 → 3`。`checkLightCode()` 同時檢查長度與每個位置，空陣列、部分答案或多餘輸入都不能開門。地圖每列維持 25 格，怪物巡邏點已隨後段地圖下移三格。
+## K2
 
-## 題目與 K2
+Run the FastAPI service in `backend/` at port 8000. Keep API credentials in `backend/.env`; never put them in a VITE variable.
 
-目前使用固定題目，K2 透過後端控制玩家並判讀文件。FILE #042 的規則是「有效的紀錄值都應是奇數」，選項為 21、23、84，因此唯一正解為 C（84）。密碼為 042，會在撿到鑰匙時告知玩家。
+After the light, memory, and path stages are complete, **K2 Step** runs one goal and **Let K2 Play** repeats. The existing backend supports key, lock, document, answer, shelter, and exit intents; the first three new puzzles remain manual. The timer does not pause while K2 thinks. Slow requests can cause timeout.
 
-之後可以讓後端使用 K2 產生與 `QUESTION` 相同形狀的題目，並由後端判定答案；前端依判定結果改變門與怪物狀態。API key 不應放進前端。原型目前的密碼與答案可以從原始碼讀到，不適用於防作弊競賽。
+`POST /agent/decide` returns SSE `decision` events. The frontend validates intent and answer IDs, executes movement through the normal collision functions, and cancels requests on manual takeover, death, or restart. K2 receives the visible question (including its expression) without the answer key. Its navigation is game-engine BFS, not model discovery of an unknown map.
 
-視野目前是圓形漸層遮罩，尚無牆壁遮光；目前使用桌面鍵盤操作。遊戲以格子碰撞和四方向 BFS 尋路控制角色與怪物，不使用重力物理。
+## Files
 
-`node_modules/`、`dist/` 已被 `.gitignore` 排除。建置時可能會提示 Phaser 的主程式包大於 500 kB，並不影響遊戲執行。
+- `src/puzzles.js`: random generation and four calculus question families.
+- `src/level.js`: rectangular 25 × 28 map, session state, deadline, puzzles, movement, traps and monster.
+- `src/main.js`: English UI, rendering, memory preview, input and automatic restart.
+- `src/audio.js`: local music and distance volume.
+- `src/agent.js`, `src/agent-panel.js`, `src/observation.js`: K2 connection, controls and restricted observations.
+- `tests/`: timed full routes, all path choices, death, safe-zone escape, randomized answer checks, SSE and cancellation.
 
-## K2 玩家整合
-
-1. 啟動目前的 `backend/main.py`（FastAPI `/agent/decide`），預設 port 8000。
-2. 啟動遊戲，先手動解開燈光 A 門；後端的六種 intent 尚未包含燈光操作。
-3. 在遊戲下方輸入後端網址，按 **K2 Step** 執行一次目標，或 **Let K2 Play** 連續遊玩。
-4. 可按「暫停」或使用移動鍵接手；「重來」取消尚未完成的請求並重設遊戲。
-
-前端也可使用 `VITE_BACKEND_URL` 設定預設網址。API key 只放在 `backend/.env`，不要使用 VITE 環境變數儲存 key。
-
-`src/agent.js` 負責 POST SSE 解析、指令白名單、取消／逾時、BFS 路線及透過 `GameSession.update()` 移動。`src/observation.js` 限制觀察；`src/agent-panel.js` 提供控制與最多 15 筆簡短決策紀錄。模型原始思考事件不顯示。
-
-API 是目前 GitHub 的 `POST /agent/decide`，不是早期規格的 `/agent/step`。只接受 `GO_KEY / GO_LOCK / GO_DOCUMENT / ANSWER / GO_SAFE / GO_EXIT`；串流必須提供 `type: "decision"`。收到 HTTP 錯誤、未知指令、非法答案、無法抵達目標或 30 秒逾時，會停止自動模式。單步代表一個高階目標，可能跨越多格。
-
-### 展示範圍
-
-- K2 決定高階目標；遊戲引擎以完整地圖 BFS 尋路並避開陷阱。因此這是 AI 目標決策示範，並非 AI 自行探索未知地圖的基準測試。
-- 不傳送整張地圖、隱藏出口座標、`correctId` 或未看見的怪物座標。只有讀到文件時才傳題目；未看見怪物時傳 `monsterTile: {}`。
-- 後端目前不接收近期事件或探索記憶，也不支援燈光序列；尚未實作的 `/question` 和 `/answer` 不會被呼叫。
-- 思考及自動模式兩次決策間暫停遊戲時鐘，避免網路延遲決定生死；路線執行時怪物仍正常移動。重生即停止 AI。
-- K2 模型與 API key 的有效性取決於後端設定；連線失敗不會使用假決策冒充模型回覆。
+Puzzle generation accepts an injected RNG for reproducible tests. Answers remain in frontend memory for this prototype; this is not an anti-cheat design. No account, database, or new dependency is required. Vite may warn about the existing large Phaser bundle.

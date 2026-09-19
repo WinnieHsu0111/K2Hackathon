@@ -1,4 +1,4 @@
-import { TILE, tileAt, QUESTION } from './level.js';
+import { TILE, tileAt } from './level.js';
 
 // Only player-visible information belongs in the request. Never serialize GameSession.
 export function getObservation(session, recentEvents = []) {
@@ -23,7 +23,7 @@ export function getObservation(session, recentEvents = []) {
     for (let x = position.x - 4; x <= position.x + 4; x++) {
       if (!visible(x, y)) continue;
       let tile = session.cell(x, y);
-      if (tile === 'M' || tile === 'P' || (tile === 'K' && session.hasKey)) tile = '.';
+      if (tile === 'X' || tile === 'M' || tile === 'P' || (tile === 'K' && session.hasKey)) tile = '.';
       tiles.push({ x, y, tile, walkable: session.canEnter(x, y) });
     }
   }
@@ -47,8 +47,8 @@ export function getObservation(session, recentEvents = []) {
   // Capture that evidence through recentEvents rather than importing DOOR_CODE.
   if (session.modal === 'document') {
     result.interaction.document = {
-      id: QUESTION.id, rule: QUESTION.rule, prompt: QUESTION.prompt,
-      options: QUESTION.options.map((option) => ({ ...option })),
+      id: session.question.id, rule: session.question.rule, prompt: session.question.prompt,
+      options: session.question.options.map((option) => ({ ...option })),
     };
   }
   if (session.modal === 'lights') {

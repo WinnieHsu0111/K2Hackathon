@@ -1,18 +1,7 @@
 :root { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: #d9ce94; background: #12120e; color-scheme: dark; }
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; display: grid; place-items: center; }
-main { width: min(1320px, 96vw); padding: 24px 0; }
-.stage { display: flex; gap: 14px; align-items: stretch; }
-.stage #game { flex: 1 1 auto; }
-#reasoning-panel { flex: 0 0 340px; border: 1px solid #524d30; background: #16170f; padding: 12px 14px; display: flex; flex-direction: column; min-height: 0; }
-#reasoning-panel h2 { font-size: 12px; letter-spacing: .16em; color: #b4a768; margin: 0 0 10px; font-weight: 500; }
-#reasoning { flex: 1 1 auto; overflow-y: auto; font-size: 12px; line-height: 1.7; }
-.reason-line { padding: 6px 0; border-bottom: 1px solid #2a2a1e; color: #b5ad8b; }
-.reason-decision { color: #ead485; }
-.reason-decision b { color: #f2e5aa; }
-.reason-agent_result b { color: #8db7a0; }
-.reason-status { color: #b4e2cd; }
-@media (max-width: 900px) { .stage { flex-direction: column; } #reasoning-panel { flex: 0 0 auto; max-height: 200px; } }
+main { width: min(960px, 96vw); padding: 24px 0; }
 header, .telemetry { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 header { margin-bottom: 16px; letter-spacing: .18em; font-size: 13px; }
 .telemetry { border: 1px solid #524d30; border-bottom: 0; padding: 10px 14px; font-size: 12px; background: #1b1c15; }
@@ -66,3 +55,12 @@ button:disabled { opacity: .4; cursor: wait; }
 .agent-controls button:disabled { opacity: .45; cursor: not-allowed; }
 #agent-log { padding-left: 24px; max-height: 220px; overflow-y: auto; }
 #agent-log li { white-space: pre-wrap; margin-bottom: 12px; line-height: 1.5; font-size: 13px; }
+
+#timer { font-size: 20px; white-space: nowrap; color: #e5d799; }
+#timer[data-urgent="true"], .clock { color: #ff9981; }
+#start-screen { padding: 22px; border: 1px solid #8b8053; margin-bottom: 16px; }
+.light-input { display: grid; grid-template-columns: repeat(2,1fr); gap: 8px; margin: 12px 0; }
+#memory-preview { font-size: 32px; color: #deedca; text-align: center; letter-spacing: .1em; }
+#memory-answers button { font-size: 23px; text-align: center; }
+dialog { max-height: 94vh; overflow-y: auto; }
+.telemetry { flex-wrap: wrap; }

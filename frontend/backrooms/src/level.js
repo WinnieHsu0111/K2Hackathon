@@ -1,28 +1,33 @@
-export const MAP = [
-  '#########################',
+import { generatePuzzles } from './puzzles.js';
+
+export const MAP = ['#########################',
   '#P....1...2...3...4.....#',
   '#.......................#',
-  '#..........C............#',
-  '###########A#############',
+  '#...........C...........#',
+  '############A############',
   '#.......................#',
-  '#.....K.................#',
+  '#...B...B...B...B...B...#',
   '#.......................#',
-  '#..............###......#',
+  '#...........R...........#',
+  '####.#######.#######.####',
+  '#.......#.......#.......#',
+  '#.......#.......#.......#',
+  '#.......#.......#.......#',
+  '####.#######.#######.####',
+  '#........K..............#',
   '#.......................#',
   '############L############',
-  '#####...............#####',
   '#####...............#####',
   '#####TTTTTT.TTTTTTTT#####',
   '#####...............#####',
   '#####.......D.......#####',
   '############G############',
   '#....SS.................#',
-  '#....SS.....M....SS.....#',
-  '#................SS....E#',
+  '#....SS.....M.....SS....#',
+  '#.................SS...E#',
   '#..SS...................#',
   '#..SS...................#',
-  '#########################',
-];
+  '#########################'];
 
 export const TILE = 48;
 export const WALK_SPEED = 145;
@@ -35,36 +40,19 @@ export const SEARCH_TIME = 3000;
 export const WAKE_TIME = 1200;
 export const MONSTER_STATE = { CHASE: 'CHASE', PATROL: 'PATROL', SEARCH: 'SEARCH' };
 export const PATROL_POINTS = [
-  { x: 3, y: 18 }, { x: 11, y: 19 }, { x: 20, y: 18 },
-  { x: 15, y: 21 }, { x: 7, y: 20 },
+  { x: 3, y: 23 }, { x: 11, y: 24 }, { x: 20, y: 23 },
+  { x: 15, y: 26 }, { x: 7, y: 25 },
 ];
-export const DOOR_CODE = '042';
 export const LIGHTS = { 1: 'RED', 2: 'BLUE', 3: 'GREEN', 4: 'YELLOW' };
 export const LIGHT_COLORS = { 1: 0xe87f72, 2: 0x76a6ee, 3: 0x8dce8a, 4: 0xe8cc70 };
-export const correctSequence = Object.freeze([2, 4, 1, 3]);
 export const LIGHT_LEAD_IN = 400;
 export const LIGHT_ON_TIME = 600;
 export const LIGHT_STEP_TIME = 900;
 
-export function checkLightCode(playerInput) {
-  return Array.isArray(playerInput) && playerInput.length === correctSequence.length
-    && correctSequence.every((expected, index) => playerInput[index] === expected);
+export function checkLightCode(playerInput, sequence) {
+  return Array.isArray(playerInput) && playerInput.length === sequence.length
+    && sequence.every((expected, index) => playerInput[index] === expected);
 }
-
-// Use a fixed question to validate the game flow first. Later, replace it with K2 output in the same data format.
-// The code and answer are currently stored in the frontend for prototyping; a scored competition version should validate them on the backend.
-export const QUESTION = {
-  id: '042',
-  rule: 'Rule: All valid record values must be odd numbers.',
-  prompt: 'Which value is the anomaly?',
-  options: [
-    { id: 'A', value: '21' },
-    { id: 'B', value: '23' },
-    { id: 'C', value: '84' },
-  ],
-  correctId: 'C',
-  explanation: '84 is the only even number, violating the odd-number rule in the document.',
-};
 
 export const center = (x, y) => ({ x: x * TILE + TILE / 2, y: y * TILE + TILE / 2 });
 export const tileAt = (point) => ({ x: Math.floor(point.x / TILE), y: Math.floor(point.y / TILE) });
@@ -104,7 +92,19 @@ export function findPath(start, goal, canEnter) {
 }
 
 export class GameSession {
-  constructor() {
+  constructor({ rng = Math.random } = {}) {
+    Object.assign(this, generatePuzzles(rng));
+    this.started = false;
+    this.timeLeft = 60000;
+    this.dead = false;
+    this.deathReason = null;
+    this.memorySolved = false;
+    this.memorySeen = false;
+    this.memoryPhase = 'idle';
+    this.memoryRemaining = 0;
+    this.memoryConsole = locate('R');
+    this.pathSolved = false;
+    this.wrongPathRespawn = center(12, 8);
     if (MAP.some((row) => row.length !== MAP[0].length)) throw new Error('Unequal map rows');
     this.player = locate('P');
     this.lightConsole = locate('C');
@@ -112,7 +112,7 @@ export class GameSession {
     this.lightInput = [];
     this.lightPhase = 'idle';
     this.lightElapsed = 0;
-    this.lightNotice = 'Press Play and memorize the sequence of four lights.';
+    this.lightNotice = 'Press Play and memorize the sequence of five lights.';
     this.pressedLight = null;
     this.lightFlashRemaining = 0;
     this.key = locate('K');
@@ -141,11 +141,67 @@ export class GameSession {
     this.message = 'The first gate requires a light sequence. Approach console C and press F to play it.';
   }
 
-  cell(x, y) { return MAP[y]?.[x] ?? '#'; }
+  start() { if (!this.dead && !this.won) this.started = true; }
+
+  get gameOver() { return this.dead || this.won; }
+  get aiReady() { return this.started && this.firstGateOpen && this.memorySolved && this.pathSolved && !this.gameOver; }
+
+  die(reason) {
+    if (this.gameOver) return;
+    this.dead = true;
+    this.deathReason = reason;
+    this.monsterActive = false;
+    this.modal = null;
+    this.message = `YOU DIED · ${reason}. Generating a new session...`;
+  }
+
+  // Called once per rendered frame with real elapsed time, outside movement / AI code.
+  advanceTime(delta) {
+    if (!this.started || this.gameOver) return;
+    const ms = Math.max(0, Number.isFinite(delta) ? delta : 0);
+    this.timeLeft = Math.max(0, this.timeLeft - ms);
+    if (this.timeLeft === 0) { this.die('TIME OUT'); return; }
+    this.updateLights(ms);
+    if (this.memoryPhase === 'reveal') {
+      this.memoryRemaining = Math.max(0, this.memoryRemaining - ms);
+      if (!this.memoryRemaining) {
+        this.memoryPhase = 'input';
+        if (Math.hypot(this.player.x-this.memoryConsole.x, this.player.y-this.memoryConsole.y) >= TILE*1.15) this.modal = null;
+        this.message = 'Symbols hidden. Approach R and press F to select the order.';
+      }
+    }
+  }
+
+  revealMemory() {
+    if (this.gameOver || this.memorySolved) return;
+    this.memorySeen = true;
+    this.memoryPhase = 'reveal';
+    this.memoryRemaining = 3000;
+    this.modal = 'memory';
+    this.message = 'Memorize all five symbols. You have three seconds.';
+  }
+
+  answerMemory(index) {
+    if (this.gameOver || this.modal !== 'memory' || this.memoryPhase !== 'input') return false;
+    if (index !== this.memoryAnswer) {
+      this.revealMemory();
+      this.message = 'MEMORY RESET · Watch the symbols again. The clock is still running.';
+      return false;
+    }
+    this.memorySolved = true;
+    this.modal = null;
+    this.message = 'Memory verified. Choose LEFT, CENTER, or RIGHT. Fake paths return you here.';
+    return true;
+  }
+
+  cell(x, y) {
+    if (y === 13 && [4,12,20].includes(x) && ['LEFT','CENTER','RIGHT'][[4,12,20].indexOf(x)] !== this.correctPath) return 'X';
+    return MAP[y]?.[x] ?? '#';
+  }
 
   canEnter(x, y, monster = false) {
     const cell = this.cell(x, y);
-    return cell !== '#' && !(cell === 'S' && monster)
+    return cell !== '#' && !(y === 9 && !this.memorySolved) && !(cell === 'S' && monster)
       && !(cell === 'A' && !this.firstGateOpen)
       && !(cell === 'L' && !this.lockOpen) && !(cell === 'G' && !this.gateOpen);
   }
@@ -154,7 +210,7 @@ export class GameSession {
     if (this.lightPhase === 'playback') {
       const elapsed = this.lightElapsed - LIGHT_LEAD_IN;
       const index = Math.floor(elapsed / LIGHT_STEP_TIME);
-      return elapsed >= 0 && elapsed % LIGHT_STEP_TIME < LIGHT_ON_TIME ? correctSequence[index] ?? null : null;
+      return elapsed >= 0 && elapsed % LIGHT_STEP_TIME < LIGHT_ON_TIME ? this.lightSequence[index] ?? null : null;
     }
     return this.lightFlashRemaining > 0 ? this.pressedLight : null;
   }
@@ -171,18 +227,17 @@ export class GameSession {
   }
 
   pressLight(id) {
-    if (this.modal || this.firstGateOpen || this.lightPhase !== 'input' || !Object.hasOwn(LIGHTS, id)) return false;
-    const button = locate(String(id));
-    if (Math.hypot(this.player.x - button.x, this.player.y - button.y) >= TILE) return false;
+    if (this.gameOver || this.modal !== 'lights' || this.firstGateOpen || this.lightPhase !== 'input' || !Object.hasOwn(LIGHTS, id)) return false;
     this.pressedLight = Number(id);
     this.lightFlashRemaining = 300;
     this.lightInput.push(Number(id));
-    this.message = `Pressed ${id} ${LIGHTS[id]} · ${this.lightInput.length}/4. Enter the four-light sequence from memory.`;
-    if (this.lightInput.length === correctSequence.length) {
-      if (checkLightCode(this.lightInput)) {
+    this.message = `Pressed ${id} ${LIGHTS[id]} · ${this.lightInput.length}/5. Enter the five-light sequence from memory.`;
+    if (this.lightInput.length === this.lightSequence.length) {
+      if (checkLightCode(this.lightInput, this.lightSequence)) {
         this.firstGateOpen = true;
         this.lightPhase = 'solved';
-        this.message = 'ACCESS GRANTED · The first gate is open. Go through door A and continue searching for the key.';
+        this.modal = null;
+        this.message = 'ACCESS GRANTED · The first gate is open. Go through door A to the memory room.';
       } else {
         this.modal = 'lights';
         this.playLightSequence(true);
@@ -193,19 +248,17 @@ export class GameSession {
   }
 
   interact() {
-    if (this.modal || this.won) return false;
+    if (!this.started || this.modal || this.gameOver) return false;
     if (Math.hypot(this.player.x - this.lightConsole.x, this.player.y - this.lightConsole.y) < TILE * 1.15) {
       if (this.firstGateOpen) { this.message = 'Light puzzle solved. Door A is open.'; return false; }
       this.modal = 'lights';
       this.playLightSequence();
       return true;
     }
-    for (const id of Object.keys(LIGHTS)) {
-      const button = locate(id);
-      if (Math.hypot(this.player.x - button.x, this.player.y - button.y) < TILE) {
-        if (this.lightPhase === 'idle') this.message = 'Go to console C and press F to watch the full light sequence first.';
-        return this.pressLight(Number(id));
-      }
+    if (this.firstGateOpen && !this.memorySolved && Math.hypot(this.player.x-this.memoryConsole.x, this.player.y-this.memoryConsole.y) < TILE*1.15) {
+      this.modal = 'memory';
+      if (!this.memorySeen) this.revealMemory();
+      return true;
     }
     return false;
   }
@@ -214,10 +267,10 @@ export class GameSession {
     this.lightFlashRemaining = Math.max(0, this.lightFlashRemaining - ms);
     if (this.lightPhase !== 'playback' || this.modal !== 'lights') return;
     this.lightElapsed += ms;
-    if (this.lightElapsed >= LIGHT_LEAD_IN + correctSequence.length * LIGHT_STEP_TIME) {
+    if (this.lightElapsed >= LIGHT_LEAD_IN + this.lightSequence.length * LIGHT_STEP_TIME) {
       this.lightPhase = 'input';
-      this.lightNotice = 'Playback complete. Return to the room, approach each of the four light buttons in order, and press F.';
-      this.message = 'Remember the sequence? Approach each light button and press F. Return to console C to replay it if needed.';
+      this.lightNotice = 'Playback complete. Enter all five lights using the buttons below.';
+      this.message = 'Enter the five-light sequence at console C. Repeated colors are allowed.';
     }
   }
 
@@ -234,12 +287,24 @@ export class GameSession {
   }
 
   movePlayer(dx, dy) {
+    if (!this.started || this.gameOver || this.modal) return false;
     // Split movement into short steps to prevent clipping through walls or skipping traps while running or dropping frames.
     const steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / 6));
     for (let step = 0; step < steps; step++) {
       for (const [axis, amount] of [['x', dx / steps], ['y', dy / steps]]) {
         const next = { ...this.player, [axis]: this.player[axis] + amount };
         if (this.occupied(next).every(({ x, y }) => this.canEnter(x, y))) this.player = next;
+      }
+      const current = tileAt(this.player);
+      if (this.cell(current.x, current.y) === 'X') {
+        this.player = { ...this.wrongPathRespawn };
+        this.respawns++;
+        this.message = 'FALSE PATH · Returned to the entrance. Try a different corridor.';
+        return true;
+      }
+      if (current.y === 14 && !this.pathSolved) {
+        this.pathSolved = true;
+        this.message = 'Path verified. Find the key and read its code.';
       }
       if (this.occupied(this.player).some(({ x, y }) => this.cell(x, y) === 'T')) {
         this.player = { ...this.trapRoomRespawn };
@@ -252,7 +317,7 @@ export class GameSession {
   }
 
   unlock(code) {
-    if (this.modal !== 'lock' || !this.hasKey || String(code).trim() !== DOOR_CODE) return false;
+    if (this.gameOver || this.modal !== 'lock' || !this.hasKey || String(code).trim() !== this.doorCode) return false;
     this.lockOpen = true;
     this.modal = null;
     this.message = 'Correct code. Enter the trap room and find the only safe passage.';
@@ -260,11 +325,11 @@ export class GameSession {
   }
 
   answer(id) {
-    if (this.modal !== 'document' || this.documentAnswered || !QUESTION.options.some((option) => option.id === id)) return false;
+    if (this.gameOver || this.modal !== 'document' || this.documentAnswered || !this.question.options.some((option) => option.id === id)) return false;
     this.documentAnswered = true;
     this.gateOpen = true;
     this.modal = null;
-    this.monsterActive = id !== QUESTION.correctId;
+    this.monsterActive = id !== this.question.correctId;
     this.monster = { ...locate('M'), target: null, state: MONSTER_STATE.CHASE };
     this.lastSeen = tileAt(this.player);
     this.patrolGoal = null;
@@ -273,7 +338,7 @@ export class GameSession {
     this.wakeRemaining = this.monsterActive ? WAKE_TIME : 0;
     this.message = this.monsterActive
       ? 'Incorrect answer. The gate is open, and the anomaly is awakening! Enter the teal safe zone and wait for it to patrol away.'
-      : `Correct answer: ${QUESTION.explanation} The gate is open. Find the final exit.`;
+      : `Correct answer: ${this.question.explanation} The gate is open. Find the final exit.`;
     return true;
   }
 
@@ -374,32 +439,23 @@ export class GameSession {
       if (distance <= step) this.monster.target = null;
     }
     if (!this.playerInSafeZone && Math.hypot(this.player.x - this.monster.x, this.player.y - this.monster.y) < PLAYER_RADIUS + MONSTER_RADIUS) {
-      this.player = { ...this.documentRespawn };
-      this.monsterActive = false;
-      this.gateOpen = false;
-      this.documentAnswered = false;
-      this.documentArmed = true;
-      this.wakeRemaining = 0;
-      this.searchRemaining = 0;
-      this.patrolGoal = null;
-      this.respawns++;
-      this.message = 'You were caught. Returned to the document. Read the rule again and submit another answer.';
+      this.die('CAUGHT BY THE MONSTER');
     }
   }
 
   update(delta, input = {}) {
     const ms = Math.max(0, Math.min(delta, 100));
-    this.updateLights(ms);
-    if (this.modal || this.won) return;
+    if (!this.started || this.modal || this.gameOver) return;
     const x = input.x || 0, y = input.y || 0;
     const length = Math.hypot(x, y) || 1;
     const step = (input.sprint ? RUN_SPEED : WALK_SPEED) * ms / 1000;
     if (this.movePlayer(x / length * step, y / length * step)) return;
 
+    if (this.firstGateOpen && !this.memorySeen && tileAt(this.player).y >= 5) { this.revealMemory(); return; }
     const near = (target, radius) => Math.hypot(this.player.x - target.x, this.player.y - target.y) < radius;
     if (!this.hasKey && near(this.key, 24)) {
       this.hasKey = true;
-      this.message = `Key collected. The key tag reads ${DOOR_CODE}; take it to the code-locked door to the south.`;
+      this.message = `Key collected. The key tag reads ${this.doorCode}; take it to the code-locked door to the south.`;
     }
     if (!near(this.lock, TILE * 1.6)) this.lockArmed = true;
     if (!this.lockOpen && near(this.lock, TILE * 0.95)) {
@@ -416,7 +472,7 @@ export class GameSession {
     if (this.gateOpen && this.documentAnswered && near(this.exit, 24)) {
       this.won = true;
       this.monsterActive = false;
-      this.message = 'You found the final exit. LEVEL 0 COMPLETE. Press R to play again.';
+      this.message = 'You found the final exit. YOU ESCAPED. Press R to play again.';
     }
   }
 }

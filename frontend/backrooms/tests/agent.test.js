@@ -9,7 +9,7 @@ const response = (frames) => new Response(new ReadableStream({ start(c) {
   c.close();
 } }), { headers: { 'Content-Type': 'text/event-stream' } });
 const decision = (intent, extra = {}) => `data: ${JSON.stringify({type:'decision',intent,...extra})}\n\n`;
-const ready = () => { const s = new GameSession(); s.firstGateOpen = true; return s; };
+const ready = () => { const s = new GameSession(); s.start(); s.firstGateOpen = true; s.memorySolved = true; s.memorySeen = true; s.pathSolved = true; s.player = {...s.key, y:s.key.y+TILE}; return s; };
 
 test('observation excludes hidden map, monster coordinates, quiz solution', () => {
   const s = new GameSession();
@@ -51,7 +51,7 @@ test('AI moves through normal game update: key, lock, trap gap, document, answer
   await runIntent(s, 'GO_KEY'); assert.equal(s.hasKey, true);
   await runIntent(s, 'GO_LOCK'); assert.equal(s.lockOpen, true);
   await runIntent(s, 'GO_DOCUMENT'); assert.equal(s.modal, 'document'); assert.equal(s.respawns, 0);
-  await runIntent(s, 'ANSWER', 'C'); assert.equal(s.gateOpen, true); assert.equal(s.monsterActive, false);
+  await runIntent(s, 'ANSWER', s.question.correctId); assert.equal(s.gateOpen, true); assert.equal(s.monsterActive, false);
   await runIntent(s, 'GO_EXIT'); assert.equal(s.won, true);
 });
 test('safe intent chooses a reachable safe area and respects collision', async () => {
@@ -64,9 +64,17 @@ test('pause invalidates a late response and prevents double requests', async () 
   const c = new AgentController(s, () => {}, 'http://test', () => { calls++; return new Promise(r => { resolve=r; }); });
   const p = c.step(); await c.step(); assert.equal(calls,1);
   c.pause(); resolve(response(decision('GO_KEY'))); await p;
-  assert.equal(c.route.length,0); assert.deepEqual(s.player,locate('P'));
+  assert.equal(c.route.length,0); assert.deepEqual(s.player,{...s.key,y:s.key.y+TILE});
 });
 test('backend failure stops auto mode and preserves player state', async () => {
   const s = ready(); const c = new AgentController(s, () => {}, 'http://test', async () => { throw new Error('offline'); });
-  c.running = true; await c.step(); assert.equal(c.active,false); assert.deepEqual(s.player,locate('P'));
+  c.running = true; await c.step(); assert.equal(c.active,false); assert.deepEqual(s.player,{...s.key,y:s.key.y+TILE});
+});
+
+test('deadline kills the run during a pending request and late decision cannot move it', async () => {
+  const s = ready(); let resolve;
+  const c = new AgentController(s, () => {}, 'http://test', () => new Promise(r => {resolve=r;}));
+  const request=c.step();s.advanceTime(60000);c.tick(16);
+  resolve(response(decision('GO_KEY')));await request;
+  assert(s.dead);assert(!c.active);assert(!s.hasKey);assert.equal(c.route.length,0);
 });

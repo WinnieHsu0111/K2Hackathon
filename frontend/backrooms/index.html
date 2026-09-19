@@ -3,18 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Backrooms — File 042</title>
+    <title>Backrooms — 60 Seconds</title>
   </head>
   <body>
     <main>
-      <header><span>BACKROOMS</span><span>LEVEL 0 / FILE 042</span></header>
-      <div class="telemetry"><span id="inventory">KEY —</span><span id="threat">No threats detected</span><button id="sound-toggle" type="button" aria-pressed="false">Jaws music: Off</button></div>
+      <header><span>BACKROOMS</span><span>60 SECONDS TO ESCAPE</span></header>
+      <section id="start-screen"><h1>BACKROOMS ESCAPE</h1><p>60 seconds. Fresh puzzles every run. Solve the lights, remember the symbols, test the paths, and find the exit.</p><button id="start-game" type="button">START · 60 SECONDS</button></section>
+      <div class="telemetry"><strong id="timer">60.0s</strong><span id="inventory">KEY —</span><span id="threat">No threats detected</span><button id="sound-toggle" type="button" aria-pressed="false">Jaws music: Off</button></div>
       <div id="game" tabindex="0" aria-label="Backrooms game. WASD or arrow keys to move, Shift to run, F to interact with nearby light buttons or the console, R to restart."></div>
       <p id="status" role="status">The first gate requires a light sequence. Approach console C and press F to play it.</p>
       <p class="controls">WASD / Arrow keys: Move · SHIFT: Run · F: Interact · R: Restart <span>Approach the locked door or touch the document to interact</span></p>
       <section class="agent-panel" aria-label="K2 player controls">
         <h2>K2 PLAYER</h2>
-        <p class="note">Solve the light puzzle first. K2 chooses a goal, and the game handles navigation. The game pauses while K2 decides.</p>
+        <p class="note">Complete the lights, memory room, and path puzzle first. K2 can then take over. The 60-second clock continues during requests.</p>
         <label for="backend-url">Backend URL</label>
         <input id="backend-url" type="url" value="http://127.0.0.1:8000" />
         <div class="agent-controls">
@@ -28,10 +29,11 @@
       </section>
     </main>
     <dialog id="interaction" aria-labelledby="dialog-title">
+      <p id="dialog-timer" class="clock">TIME LEFT 60.0s</p>
       <p class="eyebrow" id="dialog-label">ACCESS CONTROL</p>
       <h1 id="dialog-title">Enter access code</h1>
       <section id="light-panel" hidden>
-        <p>Watch the four lights, then return to the room and press F near each numbered button in the same order. Walking past a button does not activate it.</p>
+        <p>Watch five flashes, then enter the sequence here. Colors may repeat. A wrong sequence replays the lights while time keeps running.</p>
         <div class="light-preview" aria-label="Light sequence preview">
           <div data-light="1"><strong>1</strong><span>RED</span></div>
           <div data-light="2"><strong>2</strong><span>BLUE</span></div>
@@ -40,13 +42,15 @@
         </div>
         <p id="light-current" aria-live="polite">—</p>
         <p id="light-playback-status" role="status"></p>
+        <div id="light-input" class="light-input" aria-label="Enter the light sequence"></div>
         <button id="replay-lights" type="button">Replay sequence</button>
       </section>
+      <section id="memory-panel" hidden><p id="memory-notice"></p><p id="memory-preview"></p><div id="memory-answers" class="answers"></div></section>
       <section id="lock-panel">
-        <p>Use the three-digit code on the key tag to unlock this door.</p>
+        <p>Use the four-digit code on the key tag to unlock this door.</p>
         <form id="lock-form" novalidate>
-          <label for="door-code">Three-digit code</label>
-          <input id="door-code" name="code" type="text" inputmode="numeric" pattern="[0-9]{3}" minlength="3" maxlength="3" autocomplete="off" required />
+          <label for="door-code">Four-digit code</label>
+          <input id="door-code" name="code" type="text" inputmode="numeric" pattern="[0-9]{4}" minlength="4" maxlength="4" autocomplete="off" required />
           <p id="lock-error" role="alert"></p>
           <button type="submit">Unlock door →</button>
         </form>
@@ -61,6 +65,7 @@
         <button id="dialog-ai-step" type="button">K2 Step</button>
         <button id="dialog-ai-pause" type="button">Pause K2</button>
       </div>
+      <button id="restart-dialog" class="secondary" type="button">Restart with new puzzles</button>
       <button id="close-dialog" class="secondary" type="button">Close · ESC</button>
     </dialog>
     <script type="module" src="/src/main.js"></script>

@@ -1,13 +1,14 @@
 import { TILE } from './level.js';
 
 export function proximityLevel(player, monster) {
-  return Math.max(0, 1 - Math.hypot(player.x - monster.x, player.y - monster.y) / (8 * TILE));
+  return Math.max(0, 1 - Math.hypot(player.x - monster.x, player.y - monster.y) / (15 * TILE));
 }
 
 // Start media only from a user gesture. Preview briefly, then follow monster distance.
 export function createThreatAudio(button) {
   let context, media, source, gain;
   let enabled = false, destroyed = false, previewUntil = 0;
+  let lastSession, lastThreat = false, playPending = false;
   const silence = () => {
     if (context && gain) gain.gain.setTargetAtTime(0, context.currentTime, 0.08);
   };
@@ -60,9 +61,22 @@ export function createThreatAudio(button) {
   return {
     update(session) {
       if (!context || !gain) return;
-      const audible = enabled && !document.hidden && document.hasFocus();
-      const proximity = session.monsterActive ? proximityLevel(session.player, session.monster) : 0;
-      const volume = audible ? Math.max(context.currentTime < previewUntil ? 0.25 : 0, proximity * proximity * 0.65) : 0;
+      if (lastSession !== session) {
+        if (lastSession) { media.pause(); previewUntil = 0; }
+        lastSession = session; lastThreat = false;
+      }
+      const threat = session.monsterActive && !session.gameOver;
+      if (threat && !lastThreat) media.currentTime = 0;
+      lastThreat = threat;
+      const audible = enabled && !session.gameOver && !document.hidden && document.hasFocus();
+      const preview = context.currentTime < previewUntil;
+      const shouldPlay = audible && (threat || preview);
+      if (shouldPlay && media.paused && !playPending) {
+        playPending = true;
+        void media.play().catch(() => { if (!destroyed) fail(); }).finally(() => { playPending = false; });
+      } else if (!shouldPlay) media.pause();
+      const proximity = threat ? proximityLevel(session.player, session.monster) : 0;
+      const volume = shouldPlay ? Math.max(preview ? 0.25 : 0, threat ? 0.05 + proximity * proximity * 0.95 : 0) : 0;
       gain.gain.setTargetAtTime(volume, context.currentTime, 0.25);
     },
     destroy() {

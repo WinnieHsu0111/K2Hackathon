@@ -96,6 +96,7 @@ def _state_summary(state: GameState) -> str:
         f"Monster position: {state.monsterTile}",
     ]
     if state.question:
+        lines.append(f"Question: {state.question.get('prompt', 'Not supplied')}")
         lines.append(f"Puzzle rule: {state.question.get('rule', 'unknown')}")
         opts = state.question.get("options", [])
         lines.append("Options: " + ", ".join(f"{o['id']}={o['value']}" for o in opts))
@@ -182,6 +183,8 @@ def _parse_decision(content: str, state: GameState) -> dict:
 async def decide(state: GameState) -> AsyncGenerator[str, None]:
     client = get_client()
     summary = _state_summary(state)
+    if state.question:
+        summary += "\nThe document is open now. Your ONLY legal intent for this turn is ANSWER. Solve the question and provide answerId A, B, or C."
 
     messages = [
         {"role": "system", "content": SUPERVISOR_GAME},

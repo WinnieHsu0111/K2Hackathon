@@ -1,4 +1,4 @@
-import { TILE, WALK_SPEED, RUN_SPEED, center, tileAt, findPath, DOOR_CODE } from './level.js';
+import { TILE, WALK_SPEED, RUN_SPEED, center, tileAt, findPath } from './level.js';
 import { getObservation } from './observation.js';
 
 export const INTENTS = Object.freeze(['GO_KEY', 'GO_LOCK', 'GO_DOCUMENT', 'ANSWER', 'GO_SAFE', 'GO_EXIT']);
@@ -72,13 +72,13 @@ export async function requestDecision(baseUrl, state, signal, fetcher = fetch) {
 
 export function planIntent(session, decision) {
   const { intent, answerId } = decision;
-  if (!session.firstGateOpen) throw new Error('Complete the light puzzle manually before handing control to K2.');
+  if (!session.aiReady) throw new Error('Complete the lights, memory room, and path puzzle before handing control to K2.');
   if (intent === 'ANSWER') {
     if (!session.answer(answerId)) throw new Error('There is no document available to answer right now.');
     return [];
   }
   if (intent === 'GO_LOCK' && session.modal === 'lock') {
-    if (!session.unlock(DOOR_CODE)) throw new Error('You have not collected the key yet.');
+    if (!session.unlock(session.doorCode)) throw new Error('You have not collected the key yet.');
     return [];
   }
   if (session.modal) throw new Error('Complete or close the current interaction dialog first.');
@@ -101,7 +101,7 @@ export function planIntent(session, decision) {
     goals = intent === 'GO_LOCK' ? [{ x: tile.x, y: tile.y - 1 }] : [tile];
   }
   const paths = goals.map((goal) => findPath(start, goal,
-    (x, y) => session.canEnter(x, y) && session.cell(x, y) !== 'T'))
+    (x, y) => session.canEnter(x, y) && !['T','X'].includes(session.cell(x, y))))
     .filter((path) => goals.some((g) => path.at(-1).x === g.x && path.at(-1).y === g.y));
   if (!paths.length) throw new Error('The target is currently unreachable. AI stopped.');
   paths.sort((a, b) => a.length - b.length);
@@ -124,8 +124,8 @@ export class AgentController {
     this.notify({ status: message });
   }
   async step() {
-    if (this.busy || this.route.length || this.session.won) return;
-    if (!this.session.firstGateOpen) { this.pause('Solve the light puzzle to open door A manually before enabling K2.'); return; }
+    if (this.busy || this.route.length || this.session.gameOver) return;
+    if (!this.session.aiReady) { this.pause('Complete the lights, memory room, and path puzzle before enabling K2.'); return; }
     const generation = this.generation;
     this.busy = true; this.abort = new AbortController();
     const abort = this.abort;
@@ -134,7 +134,7 @@ export class AgentController {
     this.notify({ status: 'K2 is deciding the next move…' });
     try {
       const decision = await requestDecision(this.baseUrl, state, this.abort.signal, this.fetcher);
-      if (generation !== this.generation) return;
+      if (generation !== this.generation || this.session.gameOver) return;
       this.intent = decision.intent;
       this.route = planIntent(this.session, decision);
       this.turn++;
@@ -152,12 +152,12 @@ export class AgentController {
   tick(delta) {
     if (!this.active) return false;
     const s = this.session;
-    if (s.won) { this.pause('K2 has reached the exit.'); return true; }
-    // Freeze simulation during network latency; human input cancels this request.
+    if (s.gameOver) { this.pause(s.won ? 'K2 has reached the exit.' : 'Run ended.'); return true; }
+    // The scene advances the global clock even during network latency; human input cancels the request.
     if (this.busy) return true;
     if (s.modal) {
       this.route = [];
-      if (s.modal === 'lock' && this.intent === 'GO_LOCK') s.unlock(DOOR_CODE);
+      if (s.modal === 'lock' && this.intent === 'GO_LOCK') s.unlock(s.doorCode);
       else if (s.modal !== 'document') { this.pause('Complete the current interaction first.'); return true; }
     }
     if (this.route.length) {
@@ -176,7 +176,7 @@ export class AgentController {
     }
     if (this.running) {
       this.cooldown -= delta;
-      // Keep the world paused between decisions, including the document dialog.
+      // The scene continues the deadline while waiting for the next decision.
       if (this.cooldown <= 0) void this.step();
       return true;
     }
