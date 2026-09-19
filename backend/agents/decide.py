@@ -120,16 +120,63 @@ _AGENT_LABEL = {
 }
 
 
-def _parse_decision(content: str) -> dict:
+def _rule_based_intent(state: GameState) -> dict:
+    """Deterministic fallback: pick the correct intent straight from the state,
+    following the same priority order the agents use. Used when the LLM's JSON
+    can't be parsed, so the game never stalls."""
+    if state.monsterActive and state.monsterState == "CHASE" and not state.playerInSafeZone:
+        return {"intent": "GO_SAFE", "answerId": None, "reasoning": "(rule) Monster chasing — flee to safe zone."}
+    if not state.hasKey:
+        return {"intent": "GO_KEY", "answerId": None, "reasoning": "(rule) No key yet — go get it."}
+    if not state.lockOpen:
+        return {"intent": "GO_LOCK", "answerId": None, "reasoning": "(rule) Have key, door closed — open it."}
+    if not state.documentAnswered and not state.atDocument:
+        return {"intent": "GO_DOCUMENT", "answerId": None, "reasoning": "(rule) Door open — go to the document."}
+    if not state.documentAnswered and state.atDocument:
+        answer = _deduce_answer(state)
+        return {"intent": "ANSWER", "answerId": answer, "reasoning": "(rule) At document — answer the puzzle."}
+    if state.gateOpen and state.documentAnswered:
+        return {"intent": "GO_EXIT", "answerId": None, "reasoning": "(rule) Puzzle done — head to the exit."}
+    return {"intent": "GO_KEY", "answerId": None, "reasoning": "(rule) Default."}
+
+
+def _deduce_answer(state: GameState) -> str | None:
+    """Best-effort: if the puzzle rule is 'odd', pick the even option, etc.
+    Falls back to the first option if we can't tell."""
+    if not state.question:
+        return "A"
+    opts = state.question.get("options", [])
+    rule = (state.question.get("rule") or "").lower()
+    if "odd" in rule or "奇" in rule:
+        for o in opts:
+            try:
+                if int(o["value"]) % 2 == 0:
+                    return o["id"]
+            except (ValueError, KeyError):
+                pass
+    if "even" in rule or "偶" in rule:
+        for o in opts:
+            try:
+                if int(o["value"]) % 2 == 1:
+                    return o["id"]
+            except (ValueError, KeyError):
+                pass
+    return opts[0]["id"] if opts else "A"
+
+
+def _parse_decision(content: str, state: GameState) -> dict:
     if content.startswith("```"):
         content = content.split("```")[1]
         if content.startswith("json"):
             content = content[4:]
     content = content.strip()
+    # Try to find a JSON object even if there's surrounding prose.
+    if not content.startswith("{") and "{" in content:
+        content = content[content.index("{"):content.rindex("}") + 1]
     try:
         return json.loads(content)
     except Exception:
-        return {"intent": "GO_KEY", "answerId": None, "reasoning": "Fallback: could not parse decision."}
+        return _rule_based_intent(state)
 
 
 async def decide(state: GameState) -> AsyncGenerator[str, None]:
@@ -154,10 +201,11 @@ async def decide(state: GameState) -> AsyncGenerator[str, None]:
 
         # No tool call → Supervisor is giving the final decision
         if not msg.tool_calls:
-            decision = _parse_decision(msg.content or "")
+            decision = _parse_decision(msg.content or "", state)
             intent = decision.get("intent", "GO_KEY")
             if intent not in VALID_INTENTS:
-                intent = "GO_KEY"
+                decision = _rule_based_intent(state)
+                intent = decision["intent"]
             yield sse_event(
                 "decision",
                 intent=intent,
@@ -188,10 +236,11 @@ async def decide(state: GameState) -> AsyncGenerator[str, None]:
         SUPERVISOR_GAME,
         f"Current game state:\n{summary}\n\nOutput your final decision JSON now.",
     )
-    decision = _parse_decision(final)
+    decision = _parse_decision(final, state)
     intent = decision.get("intent", "GO_KEY")
     if intent not in VALID_INTENTS:
-        intent = "GO_KEY"
+        decision = _rule_based_intent(state)
+        intent = decision["intent"]
     yield sse_event(
         "decision",
         intent=intent,
