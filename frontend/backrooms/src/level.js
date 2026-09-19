@@ -51,11 +51,11 @@ export function checkLightCode(playerInput) {
     && correctSequence.every((expected, index) => playerInput[index] === expected);
 }
 
-// 固定題目先驗證遊戲流程。之後可用 K2 回傳的同一資料格式替換。
-// 密碼與答案目前都在前端，適合原型；競賽計分版應由後端判定。
+// Use a fixed question to validate the game flow first. Later, replace it with K2 output in the same data format.
+// The code and answer are currently stored in the frontend for prototyping; a scored competition version should validate them on the backend.
 export const QUESTION = {
   id: '042',
-  rule: '規則：有效的紀錄值都應是奇數。',
+  rule: 'Rule: All valid record values must be odd numbers.',
   prompt: 'Which value is the anomaly?',
   options: [
     { id: 'A', value: '21' },
@@ -63,7 +63,7 @@ export const QUESTION = {
     { id: 'C', value: '84' },
   ],
   correctId: 'C',
-  explanation: '84 是唯一的偶數，違反文件中的奇數規則。',
+  explanation: '84 is the only even number, violating the odd-number rule in the document.',
 };
 
 export const center = (x, y) => ({ x: x * TILE + TILE / 2, y: y * TILE + TILE / 2 });
@@ -77,7 +77,7 @@ export function locate(symbol, map = MAP) {
   throw new Error(`Missing map symbol: ${symbol}`);
 }
 
-// 四方向 BFS；若目標不可達，傳回最接近的可達位置。
+// Four-direction BFS; if the target is unreachable, return the closest reachable position.
 export function findPath(start, goal, canEnter) {
   const queue = [{ ...start, parent: -1 }];
   const seen = new Set([`${start.x},${start.y}`]);
@@ -112,7 +112,7 @@ export class GameSession {
     this.lightInput = [];
     this.lightPhase = 'idle';
     this.lightElapsed = 0;
-    this.lightNotice = '按下播放，記住四盞燈的順序。';
+    this.lightNotice = 'Press Play and memorize the sequence of four lights.';
     this.pressedLight = null;
     this.lightFlashRemaining = 0;
     this.key = locate('K');
@@ -120,7 +120,7 @@ export class GameSession {
     this.document = locate('D');
     this.exit = locate('E');
     this.monster = { ...locate('M'), target: null, state: MONSTER_STATE.PATROL };
-    // 門外的上方一格；文件前的上方一格。
+    // One tile above the doorway outside; one tile above the document.
     this.trapRoomRespawn = { x: this.lock.x, y: this.lock.y - TILE };
     this.documentRespawn = { x: this.document.x, y: this.document.y - TILE };
     this.hasKey = false;
@@ -138,7 +138,7 @@ export class GameSession {
     this.documentArmed = true;
     this.won = false;
     this.respawns = 0;
-    this.message = '第一道門需要燈光密碼。前往 C 控制台，靠近後按 F 播放。';
+    this.message = 'The first gate requires a light sequence. Approach console C and press F to play it.';
   }
 
   cell(x, y) { return MAP[y]?.[x] ?? '#'; }
@@ -166,7 +166,7 @@ export class GameSession {
     this.lightElapsed = 0;
     this.pressedLight = null;
     this.lightFlashRemaining = 0;
-    this.lightNotice = denied ? 'ACCESS DENIED · 輸入錯誤，重新播放。' : '觀察閃燈順序，播放時不能輸入。';
+    this.lightNotice = denied ? 'ACCESS DENIED · Incorrect sequence. Playing again.' : 'Watch the flashing light sequence. Input is disabled during playback.';
     return true;
   }
 
@@ -177,16 +177,16 @@ export class GameSession {
     this.pressedLight = Number(id);
     this.lightFlashRemaining = 300;
     this.lightInput.push(Number(id));
-    this.message = `已按下 ${id} ${LIGHTS[id]} · ${this.lightInput.length}/4。依記憶輸入四盞燈的順序。`;
+    this.message = `Pressed ${id} ${LIGHTS[id]} · ${this.lightInput.length}/4. Enter the four-light sequence from memory.`;
     if (this.lightInput.length === correctSequence.length) {
       if (checkLightCode(this.lightInput)) {
         this.firstGateOpen = true;
         this.lightPhase = 'solved';
-        this.message = 'ACCESS GRANTED · 第一道門已開啟。穿過 A 門，繼續尋找鑰匙。';
+        this.message = 'ACCESS GRANTED · The first gate is open. Go through door A and continue searching for the key.';
       } else {
         this.modal = 'lights';
         this.playLightSequence(true);
-        this.message = 'ACCESS DENIED · 第一道門仍關閉，請重新記憶燈光順序。';
+        this.message = 'ACCESS DENIED · The first gate is still closed. Memorize the light sequence again.';
       }
     }
     return true;
@@ -195,7 +195,7 @@ export class GameSession {
   interact() {
     if (this.modal || this.won) return false;
     if (Math.hypot(this.player.x - this.lightConsole.x, this.player.y - this.lightConsole.y) < TILE * 1.15) {
-      if (this.firstGateOpen) { this.message = '燈光密碼已解除，A 門已開啟。'; return false; }
+      if (this.firstGateOpen) { this.message = 'Light puzzle solved. Door A is open.'; return false; }
       this.modal = 'lights';
       this.playLightSequence();
       return true;
@@ -203,7 +203,7 @@ export class GameSession {
     for (const id of Object.keys(LIGHTS)) {
       const button = locate(id);
       if (Math.hypot(this.player.x - button.x, this.player.y - button.y) < TILE) {
-        if (this.lightPhase === 'idle') this.message = '先到 C 控制台按 F，觀看完整的燈光順序。';
+        if (this.lightPhase === 'idle') this.message = 'Go to console C and press F to watch the full light sequence first.';
         return this.pressLight(Number(id));
       }
     }
@@ -216,8 +216,8 @@ export class GameSession {
     this.lightElapsed += ms;
     if (this.lightElapsed >= LIGHT_LEAD_IN + correctSequence.length * LIGHT_STEP_TIME) {
       this.lightPhase = 'input';
-      this.lightNotice = '播放完畢。返回房間，依序靠近四個燈光按鈕並按 F。';
-      this.message = '記住順序了嗎？靠近燈光按鈕按 F。忘記時可以回 C 控制台重播。';
+      this.lightNotice = 'Playback complete. Return to the room, approach each of the four light buttons in order, and press F.';
+      this.message = 'Remember the sequence? Approach each light button and press F. Return to console C to replay it if needed.';
     }
   }
 
@@ -234,7 +234,7 @@ export class GameSession {
   }
 
   movePlayer(dx, dy) {
-    // 分成短步進，奔跑或掉幀時仍不會穿牆、跳過陷阱。
+    // Split movement into short steps to prevent clipping through walls or skipping traps while running or dropping frames.
     const steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / 6));
     for (let step = 0; step < steps; step++) {
       for (const [axis, amount] of [['x', dx / steps], ['y', dy / steps]]) {
@@ -244,7 +244,7 @@ export class GameSession {
       if (this.occupied(this.player).some(({ x, y }) => this.cell(x, y) === 'T')) {
         this.player = { ...this.trapRoomRespawn };
         this.respawns++;
-        this.message = '踩中陷阱！回到密碼門外。找出整排陷阱中的唯一缺口。';
+        this.message = 'You stepped on a trap! Returned to the outside of the code-locked door. Find the only gap in the row of traps.';
         return true;
       }
     }
@@ -255,7 +255,7 @@ export class GameSession {
     if (this.modal !== 'lock' || !this.hasKey || String(code).trim() !== DOOR_CODE) return false;
     this.lockOpen = true;
     this.modal = null;
-    this.message = '密碼正確。進入陷阱房，找出唯一安全的通道。';
+    this.message = 'Correct code. Enter the trap room and find the only safe passage.';
     return true;
   }
 
@@ -269,11 +269,11 @@ export class GameSession {
     this.lastSeen = tileAt(this.player);
     this.patrolGoal = null;
     this.searchRemaining = SEARCH_TIME;
-    // M 正對 G，短暫甦醒時間讓玩家有機會跨過門、轉向安全區。
+    // M faces G directly. A brief awakening delay gives the player time to cross the gate and turn toward the safe zone.
     this.wakeRemaining = this.monsterActive ? WAKE_TIME : 0;
     this.message = this.monsterActive
-      ? '答案錯誤。門已開啟，異常正在甦醒！進入藍綠色安全區，等它巡邏離開。'
-      : `答案正確：${QUESTION.explanation} 門已開啟，找到最終出口。`;
+      ? 'Incorrect answer. The gate is open, and the anomaly is awakening! Enter the teal safe zone and wait for it to patrol away.'
+      : `Correct answer: ${QUESTION.explanation} The gate is open. Find the final exit.`;
     return true;
   }
 
@@ -281,7 +281,7 @@ export class GameSession {
     if (this.modal === 'lights' && this.lightPhase === 'playback') {
       this.lightPhase = 'idle';
       this.lightInput = [];
-      this.message = '播放已取消。回 C 控制台按 F，觀看完整順序後再輸入。';
+      this.message = 'Playback canceled. Return to console C and press F to watch the full sequence before entering it.';
     }
     this.modal = null;
   }
@@ -291,7 +291,7 @@ export class GameSession {
     const steps = Math.max(1, Math.ceil(distance / (TILE / 8)));
     for (let i = 1; i <= steps; i++) {
       const tile = tileAt({ x: from.x + (to.x - from.x) * i / steps, y: from.y + (to.y - from.y) * i / steps });
-      // 安全區也阻隔視線；關閉的 L/G 與牆壁都不能看穿。
+      // Safe zones also block line of sight; closed L/G doors and walls cannot be seen through.
       if (!this.canEnter(tile.x, tile.y, true)) return false;
     }
     return true;
@@ -306,7 +306,7 @@ export class GameSession {
   changeMonsterState(next) {
     if (this.monster.state === next) return;
     this.monster.state = next;
-    // 先回到當前格子中心再轉向，避免改變狀態時斜切牆角。
+    // Return to the center of the current tile before turning to avoid cutting diagonally through wall corners when changing state.
     const tile = tileAt(this.monster);
     const point = center(tile.x, tile.y);
     this.monster.target = Math.hypot(point.x - this.monster.x, point.y - this.monster.y) > 0.01 ? point : null;
@@ -317,12 +317,12 @@ export class GameSession {
   choosePatrolGoal() {
     const playerTile = this.patrolAvoid ?? this.lastSeen ?? tileAt(this.monster);
     const monsterTile = tileAt(this.monster);
-    // 全部先換成格子座標；優先選離玩家超過 6 格、且不在當前位置的點。
+    // Convert everything to tile coordinates first; prefer points more than 6 tiles from the player and different from the current position.
     const candidates = PATROL_POINTS.filter((point) => this.canEnter(point.x, point.y, true)
       && (point.x !== monsterTile.x || point.y !== monsterTile.y));
     const distant = candidates.filter((point) => Math.hypot(point.x - playerTile.x, point.y - playerTile.y) > 6);
     const pool = distant.length ? distant : candidates;
-    // 可重現的巡邏選擇。優先選路徑會遠離玩家的位置，避免守在安全區門外。
+    // Deterministic patrol selection. Prefer destinations whose paths lead away from the player to avoid camping outside the safe zone.
     const ranked = pool.map((point) => {
       const path = findPath(monsterTile, point, (x, y) => this.canEnter(x, y, true));
       const end = path.at(-1);
@@ -351,7 +351,7 @@ export class GameSession {
     }
     if (this.wakeRemaining > 0) { this.wakeRemaining = Math.max(0, this.wakeRemaining - ms); return; }
 
-    // 只在格子中心換方向，避免斜切牆角或闖入 S。
+    // Change direction only at tile centers to avoid cutting diagonally through wall corners or entering S.
     if (!this.monster.target) {
       let goal = this.lastSeen ?? tileAt(this.monster);
       if (this.monster.state === MONSTER_STATE.PATROL) {
@@ -383,7 +383,7 @@ export class GameSession {
       this.searchRemaining = 0;
       this.patrolGoal = null;
       this.respawns++;
-      this.message = '被抓到了。你回到文件前，再讀一次規則，重新作答。';
+      this.message = 'You were caught. Returned to the document. Read the rule again and submit another answer.';
     }
   }
 
@@ -399,11 +399,11 @@ export class GameSession {
     const near = (target, radius) => Math.hypot(this.player.x - target.x, this.player.y - target.y) < radius;
     if (!this.hasKey && near(this.key, 24)) {
       this.hasKey = true;
-      this.message = `取得鑰匙。鑰匙牌刻著 ${DOOR_CODE}；把它帶到南側的密碼門。`;
+      this.message = `Key collected. The key tag reads ${DOOR_CODE}; take it to the code-locked door to the south.`;
     }
     if (!near(this.lock, TILE * 1.6)) this.lockArmed = true;
     if (!this.lockOpen && near(this.lock, TILE * 0.95)) {
-      if (!this.hasKey) this.message = '密碼門鎖住了。先回到探索區找到鑰匙。';
+      if (!this.hasKey) this.message = 'The code-locked door is locked. Return to the exploration area and find the key first.';
       else if (this.lockArmed) { this.modal = 'lock'; this.lockArmed = false; }
     }
     if (!near(this.document, TILE)) this.documentArmed = true;
@@ -416,7 +416,7 @@ export class GameSession {
     if (this.gateOpen && this.documentAnswered && near(this.exit, 24)) {
       this.won = true;
       this.monsterActive = false;
-      this.message = '你找到了最終出口。LEVEL 0 COMPLETE。按 R 再玩一次。';
+      this.message = 'You found the final exit. LEVEL 0 COMPLETE. Press R to play again.';
     }
   }
 }

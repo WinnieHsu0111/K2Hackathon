@@ -5,12 +5,13 @@ export function createAgentPanel(session, restart) {
   let controller;
   const log = el('agent-log');
   log.replaceChildren();
+  const englishText = (value, fallback) => typeof value === 'string' && !/\p{Script=Han}/u.test(value) ? value : fallback;
   const notify = ({ status, entry }) => {
-    el('agent-status').textContent = status;
+    el('agent-status').textContent = englishText(status, 'K2 paused. Check the backend connection and try again.');
     if (entry) {
       const item = document.createElement('li');
       const position = entry.state.playerTile;
-      item.textContent = `#${entry.turn} · (${position.x}, ${position.y}) · ${entry.intent}${entry.answerId ? ` ${entry.answerId}` : ''}\n${entry.reason}`;
+      item.textContent = `#${entry.turn} · (${position.x}, ${position.y}) · ${entry.intent}${entry.answerId ? ` ${entry.answerId}` : ''}\n${englishText(entry.reason, 'The backend returned a non-English explanation.')}`;
       log.prepend(item);
       while (log.children.length > 15) log.lastElementChild.remove();
     }
@@ -24,7 +25,7 @@ export function createAgentPanel(session, restart) {
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error();
       controller.baseUrl = url.href.replace(/\/$/, '');
       return true;
-    } catch { notify({ status: '請輸入有效的 http 或 https 後端網址。' }); return false; }
+    } catch { notify({ status: 'Enter a valid http or https backend URL.' }); return false; }
   };
   const step = () => { if (configure()) void controller.step(); };
   el('ai-step').onclick = step;
@@ -33,7 +34,7 @@ export function createAgentPanel(session, restart) {
   el('ai-pause').onclick = () => controller.pause();
   el('dialog-ai-pause').onclick = () => controller.pause();
   el('ai-reset').onclick = () => { controller.pause(); restart(); };
-  notify({ status: '先解開燈光 A 門，再讓 K2 接手。' });
+  notify({ status: 'Solve the light puzzle to open door A before letting K2 take over.' });
   return {
     controller,
     sync() {

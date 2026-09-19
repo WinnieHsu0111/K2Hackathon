@@ -25,7 +25,7 @@ class GameUI {
       this.onManual?.();
       if (this.session.unlock(byId('door-code').value)) this.close();
       else {
-        byId('lock-error').textContent = '密碼不符。再看一次鑰匙牌上的三位數。';
+        byId('lock-error').textContent = 'Incorrect code. Check the three digits on the key tag again.';
         byId('door-code').select();
       }
     };
@@ -54,15 +54,15 @@ class GameUI {
     const session = this.session;
     updateText(byId('status'), session.message);
     updateText(byId('inventory'), !session.firstGateOpen ? `LIGHT CODE ${session.lightInput.length}/4` : session.hasKey ? `KEY ✓  /  CODE ${DOOR_CODE}` : 'KEY —');
-    let threat = '未偵測到威脅';
-    if (session.won) threat = '已成功逃離';
+    let threat = 'No threats detected';
+    if (session.won) threat = 'Escaped successfully';
     else if (session.monsterActive) {
-      if (session.playerInSafeZone) threat = '安全區 · 怪物正在巡邏';
-      else if (session.wakeRemaining > 0) threat = '異常甦醒中 · 立刻離開門口';
-      else if (session.monster.state === MONSTER_STATE.CHASE) threat = '被發現了 · 前往安全區';
-      else if (session.monster.state === MONSTER_STATE.SEARCH) threat = '怪物搜尋中 · 保持隱蔽';
-      else threat = '怪物巡邏中 · 避開視線';
-    } else if (session.playerInSafeZone) threat = '安全區';
+      if (session.playerInSafeZone) threat = 'Safe zone · Monster on patrol';
+      else if (session.wakeRemaining > 0) threat = 'Anomaly awakening · Move away from the doorway now';
+      else if (session.monster.state === MONSTER_STATE.CHASE) threat = 'Spotted · Head to the safe zone';
+      else if (session.monster.state === MONSTER_STATE.SEARCH) threat = 'Monster searching · Stay hidden';
+      else threat = 'Monster patrolling · Stay out of sight';
+    } else if (session.playerInSafeZone) threat = 'Safe zone';
     updateText(byId('threat'), threat);
     byId('threat').dataset.active = String(session.monsterActive && !session.playerInSafeZone && session.monster.state === MONSTER_STATE.CHASE);
 
@@ -74,7 +74,7 @@ class GameUI {
       byId('lock-panel').hidden = !isLock;
       byId('document-panel').hidden = isLock || isLight;
       byId('light-panel').hidden = !isLight;
-      byId('dialog-title').textContent = isLight ? '記住燈光順序' : isLock ? '輸入密碼' : `FILE #${QUESTION.id}`;
+      byId('dialog-title').textContent = isLight ? 'Memorize the light sequence' : isLock ? 'Enter the code' : `FILE #${QUESTION.id}`;
       byId('dialog-label').textContent = isLight ? 'LIGHT CODE / FIRST GATE' : isLock ? 'ACCESS CONTROL / LOCKED' : 'RECOVERED DOCUMENT';
       byId('lock-error').textContent = '';
       byId('door-code').value = '';
@@ -91,7 +91,7 @@ class GameUI {
       for (const light of document.querySelectorAll('[data-light]')) light.classList.toggle('lit', Number(light.dataset.light) === session.activeLight);
       byId('replay-lights').disabled = session.lightPhase === 'playback';
     }
-    byId('close-dialog').textContent = session.modal === 'lights' && session.lightPhase === 'input' ? '返回房間，開始輸入 →' : '先離開 · ESC';
+    byId('close-dialog').textContent = session.modal === 'lights' && session.lightPhase === 'input' ? 'Return to the room and enter the sequence →' : 'Leave for now · ESC';
   }
 }
 
@@ -114,7 +114,7 @@ class Backrooms extends Phaser.Scene {
     this.lightButtons = {};
     ui.bind(this.session, this.input.keyboard);
     this.agentPanel = createAgentPanel(this.session, () => this.scene.restart());
-    ui.onManual = () => { if (this.agentPanel.controller.active) this.agentPanel.controller.pause('手動互動已接手。'); };
+    ui.onManual = () => { if (this.agentPanel.controller.active) this.agentPanel.controller.pause('Manual interaction has taken over.'); };
     byId('backend-url').onfocus = () => { this.input.keyboard.resetKeys(); this.input.keyboard.enabled = false; };
     byId('backend-url').onblur = () => { this.input.keyboard.resetKeys(); this.input.keyboard.enabled = !this.session.modal; };
     this.events.once('shutdown', () => { this.agentPanel.destroy(); ui.close(); });
@@ -183,7 +183,7 @@ class Backrooms extends Phaser.Scene {
     this.cameras.main.setBounds(0, 0, MAP[0].length * TILE, MAP.length * TILE);
     this.cameras.main.startFollow(this.player, true);
 
-    // 圓形漸層視野；此版本尚未實作牆壁遮光。
+    // Circular gradient field of view; wall occlusion is not implemented in this version.
     if (!this.textures.exists('darkness')) {
       const size = 2048;
       const texture = this.textures.createCanvas('darkness', size, size);
@@ -221,7 +221,7 @@ class Backrooms extends Phaser.Scene {
     }
     if (state.won && !this.finished) {
       this.finished = true;
-      this.add.text(480, 288, 'LEVEL 0 COMPLETE\n\n按 R 重新開始', {
+      this.add.text(480, 288, 'LEVEL 0 COMPLETE\n\nPress R to restart', {
         fontFamily: 'monospace', fontSize: '26px', align: 'center', color: '#eee6ba',
         backgroundColor: '#171710', padding: { x: 28, y: 24 },
       }).setOrigin(0.5).setScrollFactor(0).setDepth(20);
@@ -237,7 +237,7 @@ class Backrooms extends Phaser.Scene {
     const humanInput = !typing && this.input.keyboard.enabled &&
       [this.keys.W, this.keys.A, this.keys.S, this.keys.D, this.keys.F, this.keys.R,
         this.cursors.up, this.cursors.down, this.cursors.left, this.cursors.right].some((key) => key.isDown);
-    if (humanInput && agent.active) agent.pause('手動操作已接手，K2 已暫停。');
+    if (humanInput && agent.active) agent.pause('Manual control has taken over. K2 paused.');
     if (agent.tick(delta)) { this.renderState(); return; }
     if (typing && !this.session.modal) { this.renderState(); return; }
     if (this.session.modal) {
