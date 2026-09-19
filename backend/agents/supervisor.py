@@ -11,20 +11,7 @@ from .survival import call_survival
 from .navigator import call_navigator
 from game_state import LEVELS, get_memory_summary, record_attempt
 
-SUPERVISOR_PROMPT = textwrap.dedent("""
-You are the Judge in a Backrooms escape game.
-Given the Navigator's chosen action and the room's exit condition, decide:
 
-- SUCCESS: the action clearly matches the exit condition
-- DANGER: the action clearly triggers the danger condition
-- CONTINUE: the action is reasonable but doesn't resolve the room yet
-
-The exit condition is: {exit_condition}
-The danger condition is: {danger_condition}
-
-Respond with exactly one word: SUCCESS, DANGER, or CONTINUE.
-Then on a new line, briefly explain why (1 sentence).
-""").strip()
 
 
 async def judge_action(action: str, room: dict) -> tuple[str, str]:
