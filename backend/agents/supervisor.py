@@ -12,6 +12,17 @@ from .navigator import call_navigator
 from game_state import LEVELS, get_memory_summary, record_attempt
 
 
+SUPERVISOR_PROMPT = """You are the game supervisor for a Backrooms escape scenario.
+Judge the Navigator's action against the room conditions.
+Reply with exactly two lines:
+1. One verdict: SUCCESS, DANGER, or CONTINUE.
+2. A brief reason.
+
+The exit condition is: {exit_condition}
+The danger condition is: {danger_condition}
+"""
+
+
 
 
 async def judge_action(action: str, room: dict) -> tuple[str, str]:

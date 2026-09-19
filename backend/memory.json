@@ -1,0 +1,40 @@
+{
+  "attempts": [
+    {
+      "level": 1,
+      "action": "Carefully read the crumpled note lying on the floor near the east door, without lifting or unfolding it more than absolutely necessary.",
+      "result": "no_progress",
+      "reason": "Action had no clear outcome"
+    },
+    {
+      "level": 1,
+      "action": "Wait in silence and listen intently for any sounds or changes near the doors and the light fixture for 60 seconds.",
+      "result": "no_progress",
+      "reason": "Action had no clear outcome"
+    },
+    {
+      "level": 1,
+      "action": "Carefully approach the south door, staying low and minimizing noise, then peer through the gap to visually inspect the space beyond without entering or pushing the door further.",
+      "result": "no_progress",
+      "reason": "Action had no clear outcome"
+    },
+    {
+      "level": 1,
+      "action": "Carefully pick up the crumpled note from the floor near the east door and unfold it completely to read its contents.",
+      "result": "no_progress",
+      "reason": "Action had no clear outcome"
+    },
+    {
+      "level": 1,
+      "action": "Quietly open any personal gear you are carrying (backpack, pockets, utility belt) and take stock of what you have \u2013\u2011 flashlights with extra batteries, gloves or cloth masks, a multitool or sturdy stick, batteries, any food/water, and any signal\u2011making devices \u2013\u2011 without moving from the center of the room.",
+      "result": "no_progress",
+      "reason": "Action had no clear outcome"
+    },
+    {
+      "level": 1,
+      "action": "Push open the slightly ajar south door just enough to slip through, then step decisively into the space beyond, keeping low and ready to immediately back out if anything lunges or the door tries to seal behind you.",
+      "result": "no_progress",
+      "reason": "Action had no clear outcome"
+    }
+  ]
+}
