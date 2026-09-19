@@ -30,7 +30,7 @@ npm run build
 - Reach **E** before the countdown ends to see **YOU ESCAPED**.
 - Timeout or capture shows **YOU DIED** for two seconds, then automatically starts a fresh randomized session. Manual restart also generates fresh values.
 
-The clock continues during every dialog, retry, and K2 request. It uses elapsed wall-clock time, independent of the movement delta clamp; background time is deducted when rendering resumes. Winning freezes the clock. START prevents the initial run from expiring while you read the instructions.
+The clock continues during dialogs and retries, but pauses during an active K2 model request. It uses elapsed wall-clock time, independent of the movement delta clamp; background time is deducted when rendering resumes. Winning freezes the clock. START prevents the initial run from expiring while you read the instructions.
 
 ## Music
 
@@ -40,7 +40,7 @@ Enable **Jaws music** to authorize browser playback. A two-second preview confir
 
 Run the FastAPI service in `backend/` at port 8000. Keep API credentials in `backend/.env`; never put them in a VITE variable.
 
-After the light, memory, and path stages are complete, **K2 Step** runs one goal and **Let K2 Play** repeats. The existing backend supports key, lock, document, answer, shelter, and exit intents; the first three new puzzles remain manual. The timer does not pause while K2 thinks. Slow requests can cause timeout.
+K2 starts automatically when the page loads or the run restarts. **Let K2 Play** resumes after a pause. It controls every room: lights, memory, path trials, key, lock, calculus document, and exit. Each decision runs Explorer, Survival, Navigator, then Supervisor, with live reports in the panel. The controller records lights during playback and symbols during reveal; K2 receives these observations and chooses the inputs. Path failures are remembered and retried without reading the hidden correct corridor. The 60-second clock pauses during model requests, but movement and puzzle playback still count. **K2 Step** runs a single goal; use continuous play for the full demonstration.
 
 `POST /agent/decide` returns SSE `decision` events. The frontend validates intent and answer IDs, executes movement through the normal collision functions, and cancels requests on manual takeover, death, or restart. K2 receives the visible question (including its expression) without the answer key. Its navigation is game-engine BFS, not model discovery of an unknown map.
 

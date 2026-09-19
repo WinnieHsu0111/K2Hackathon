@@ -78,3 +78,15 @@ test('deadline kills the run during a pending request and late decision cannot m
   resolve(response(decision('GO_KEY')));await request;
   assert(s.dead);assert(!c.active);assert(!s.hasKey);assert.equal(c.route.length,0);
 });
+
+test('SSE forwards specialist progress and reports before final decision', async () => {
+  const events = [];
+  const frames = [
+    {type:'agent_thinking', agent:'Explorer', message:'Observing'},
+    {type:'agent_result', agent:'Explorer', content:'Key missing'},
+  ];
+  const stream = frames.map(e => `data: ${JSON.stringify(e)}\n\n`).join('') + decision('GO_KEY');
+  const result = await requestDecision('http://test', {}, undefined, async () => response(stream), e => events.push(e));
+  assert.deepEqual(events, frames);
+  assert.equal(result.intent, 'GO_KEY');
+});

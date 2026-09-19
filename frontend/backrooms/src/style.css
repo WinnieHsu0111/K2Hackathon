@@ -64,3 +64,15 @@ button:disabled { opacity: .4; cursor: wait; }
 #memory-answers button { font-size: 23px; text-align: center; }
 dialog { max-height: 94vh; overflow-y: auto; }
 .telemetry { flex-wrap: wrap; }
+
+/* Live specialist workflow, in execution order. */
+#agent-log { list-style: none; padding: 0; max-height: 380px; }
+#agent-log .workflow-card { border-left: 3px solid #8b87d7; padding: 10px 12px; background: #ffffff08; overflow-wrap: anywhere; }
+.workflow-card strong { display: block; color: #c3bfff; font-size: 13px; }
+.workflow-card div { margin-top: 6px; font-size: 13px; line-height: 1.5; }
+#agent-log .decision { border-color: #91c799; background: #91c79912; }
+#agent-log .working { opacity: .75; }
+
+#dialog-agent-status { color: #c3bfff; font-weight: bold; }
+#dialog-agent-log { max-height: 130px; overflow-y: auto; list-style: none; padding: 0; border-left: 2px solid #8b87d7; }
+#dialog-agent-log li { padding: 5px 10px; font-size: 12px; }

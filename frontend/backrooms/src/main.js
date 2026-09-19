@@ -271,7 +271,8 @@ class Backrooms extends Phaser.Scene {
 
   update(_time, delta) {
     const now = performance.now();
-    this.session.advanceTime(now - this.lastClock);
+    // Pause the demo deadline during real model calls, not during puzzle playback or movement.
+    if (!this.agentPanel.controller.busy) this.session.advanceTime(now - this.lastClock);
     this.lastClock = now;
     const agent = this.agentPanel.controller;
     if (this.session.dead) {

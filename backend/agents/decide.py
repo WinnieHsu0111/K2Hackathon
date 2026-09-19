@@ -1,10 +1,5 @@
-"""
-Decision loop for K2-plays-the-game mode.
-
-The Supervisor is the main agent. It orchestrates three specialist agents
-(explorer, survival, navigator) via tool calling — it decides which agents
-to call, and how many, each turn — then outputs a final intent for the frontend
-to execute via BFS pathfinding.
+"""Game decisions: Explorer, Survival, and Navigator report in sequence.
+The Supervisor combines all three reports into one frontend intent.
 """
 
 from __future__ import annotations
@@ -16,10 +11,19 @@ from pydantic import BaseModel
 
 from .base import K2_MODEL, get_client, sse_event, SHARED_PROMPT, load_prompt
 
-VALID_INTENTS = ["GO_KEY", "GO_LOCK", "GO_DOCUMENT", "ANSWER", "GO_SAFE", "GO_EXIT"]
+VALID_INTENTS = ["WATCH_LIGHTS", "ENTER_LIGHTS", "GO_MEMORY", "ANSWER_MEMORY", "TRY_PATH", "GO_KEY", "GO_LOCK", "GO_DOCUMENT", "ANSWER", "GO_SAFE", "GO_EXIT"]
 
 
 class GameState(BaseModel):
+    firstGateOpen: bool = True
+    memorySolved: bool = True
+    pathSolved: bool = True
+    lightPhase: str = "idle"
+    memoryPhase: str = "idle"
+    observedLights: list[int] = []
+    observedSymbols: list[str] = []
+    memoryOptions: list[list[str]] = []
+    triedPaths: list[str] = []
     hasKey: bool = False
     lockOpen: bool = False
     gateOpen: bool = False
@@ -181,72 +185,26 @@ def _parse_decision(content: str, state: GameState) -> dict:
 
 
 async def decide(state: GameState) -> AsyncGenerator[str, None]:
-    client = get_client()
-    summary = _state_summary(state)
+    """Consult every specialist, then let the Supervisor choose the action."""
+    summary = _state_summary(state) + "\nOpening puzzle observations: " + json.dumps(state.model_dump(include={"firstGateOpen", "memorySolved", "pathSolved", "lightPhase", "memoryPhase", "observedLights", "observedSymbols", "memoryOptions", "triedPaths"}))
     if state.question:
-        summary += "\nThe document is open now. Your ONLY legal intent for this turn is ANSWER. Solve the question and provide answerId A, B, or C."
-
-    messages = [
-        {"role": "system", "content": SUPERVISOR_GAME},
-        {"role": "user", "content": f"Current game state:\n{summary}\n\nDecide the next intent. Call agents as needed."},
-    ]
-
-    yield sse_event("agent_thinking", agent="Supervisor", message="Deciding which agents to consult...")
-
-    for _turn in range(MAX_TURNS):
-        r = await client.chat.completions.create(
-            model=K2_MODEL,
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
-        )
-        msg = r.choices[0].message
-
-        # No tool call → Supervisor is giving the final decision
-        if not msg.tool_calls:
-            decision = _parse_decision(msg.content or "", state)
-            intent = decision.get("intent", "GO_KEY")
-            if intent not in VALID_INTENTS:
-                decision = _rule_based_intent(state)
-                intent = decision["intent"]
-            yield sse_event(
-                "decision",
-                intent=intent,
-                answerId=decision.get("answerId"),
-                reasoning=decision.get("reasoning", ""),
-            )
-            return
-
-        # Execute each tool the Supervisor called
-        messages.append(msg.model_dump(exclude_unset=True))
-        for tc in msg.tool_calls:
-            name = tc.function.name
-            label, thinking = _AGENT_LABEL.get(name, ("Agent", "Working..."))
-            yield sse_event("agent_thinking", agent=label, message=thinking)
-
-            output = await _run_tool(name, summary)
+        summary += "\nThe document is open. Return ANSWER with answerId A, B, or C."
+    yield sse_event("agent_thinking", agent="Supervisor", message="Consulting Explorer, Survival, and Navigator.")
+    reports = []
+    try:
+        for name, (label, message) in _AGENT_LABEL.items():
+            yield sse_event("agent_thinking", agent=label, message=message)
+            context = summary + ("\n\nPrevious specialist reports:\n" + "\n".join(reports) if reports else "")
+            output = await _run_tool(name, context)
+            reports.append(f"{label}: {output}")
             yield sse_event("agent_result", agent=label, content=output)
-
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": output,
-            })
-
-    # Hit the turn cap without a final decision — ask once more, plainly
-    yield sse_event("agent_thinking", agent="Supervisor", message="Finalizing decision...")
-    final = await _ask(
-        SUPERVISOR_GAME,
-        f"Current game state:\n{summary}\n\nOutput your final decision JSON now.",
-    )
-    decision = _parse_decision(final, state)
-    intent = decision.get("intent", "GO_KEY")
-    if intent not in VALID_INTENTS:
-        decision = _rule_based_intent(state)
-        intent = decision["intent"]
-    yield sse_event(
-        "decision",
-        intent=intent,
-        answerId=decision.get("answerId"),
-        reasoning=decision.get("reasoning", ""),
-    )
+        yield sse_event("agent_thinking", agent="Supervisor", message="Combining all three reports into a final decision.")
+        content = await _ask(SUPERVISOR_GAME, f"Current game state:\n{summary}\n\nSpecialist reports:\n" + "\n".join(reports) + "\n\nReturn your final decision JSON.")
+        decision = _parse_decision(content, state)
+        if not isinstance(decision, dict) or decision.get("intent") not in VALID_INTENTS:
+            decision = _rule_based_intent(state)
+        yield sse_event("decision", intent=decision["intent"], answerId=decision.get("answerId"), reasoning=decision.get("reasoning", ""), sequence=decision.get("sequence"), memoryIndex=decision.get("memoryIndex"), path=decision.get("path"))
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Multi-agent decision failed")
+        yield sse_event("error", message="A model call failed. Check the backend logs and retry.")

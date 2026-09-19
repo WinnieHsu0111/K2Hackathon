@@ -1,11 +1,17 @@
 import { TILE, WALK_SPEED, RUN_SPEED, center, tileAt, findPath } from './level.js';
 import { getObservation } from './observation.js';
 
-export const INTENTS = Object.freeze(['GO_KEY', 'GO_LOCK', 'GO_DOCUMENT', 'ANSWER', 'GO_SAFE', 'GO_EXIT']);
+export const INTENTS = Object.freeze(['WATCH_LIGHTS', 'ENTER_LIGHTS', 'GO_MEMORY', 'ANSWER_MEMORY', 'TRY_PATH', 'GO_KEY', 'GO_LOCK', 'GO_DOCUMENT', 'ANSWER', 'GO_SAFE', 'GO_EXIT']);
 
-export function buildAgentState(session) {
+export function buildAgentState(session, evidence = {}) {
   const observation = getObservation(session);
   return {
+    firstGateOpen: session.firstGateOpen, memorySolved: session.memorySolved, pathSolved: session.pathSolved,
+    lightPhase: session.lightPhase, memoryPhase: session.memoryPhase,
+    observedLights: evidence.lights || [], observedSymbols: evidence.symbols || [],
+    memoryOptions: session.modal === 'memory' && session.memoryPhase === 'input' ? session.memoryOptions : [],
+    triedPaths: evidence.triedPaths || [],
+    atDocument: session.modal === 'document',
     hasKey: session.hasKey, lockOpen: session.lockOpen, gateOpen: session.gateOpen,
     documentAnswered: session.documentAnswered,
     monsterActive: observation.monster.visible || observation.monster.heard,
@@ -20,12 +26,15 @@ export function buildAgentState(session) {
 export function validateDecision(value) {
   if (!value || !INTENTS.includes(value.intent)) throw new Error('The backend returned an unsupported command.');
   if (value.intent === 'ANSWER' && !['A', 'B', 'C'].includes(value.answerId)) throw new Error('The answer returned by the backend must be A, B, or C.');
-  return { intent: value.intent, answerId: value.answerId ?? null,
+  if (value.intent === 'ENTER_LIGHTS' && (!Array.isArray(value.sequence) || value.sequence.length !== 5 || value.sequence.some(x => ![1,2,3,4].includes(x)))) throw new Error('Invalid light sequence from K2.');
+  if (value.intent === 'ANSWER_MEMORY' && ![0,1,2].includes(value.memoryIndex)) throw new Error('Invalid memory choice from K2.');
+  if (value.intent === 'TRY_PATH' && !['LEFT','CENTER','RIGHT'].includes(value.path)) throw new Error('Invalid path from K2.');
+  return { sequence: value.sequence, memoryIndex: value.memoryIndex, path: value.path, intent: value.intent, answerId: value.answerId ?? null,
     reason: typeof value.reasoning === 'string' ? value.reasoning.slice(0, 500) : '' };
 }
 
 // fetch is required: this endpoint uses POST, which EventSource cannot send.
-export async function requestDecision(baseUrl, state, signal, fetcher = fetch) {
+export async function requestDecision(baseUrl, state, signal, fetcher = fetch, onEvent = null) {
   const response = await fetcher(`${baseUrl.replace(/\/$/, '')}/agent/decide`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
     body: JSON.stringify(state), signal,
@@ -45,7 +54,8 @@ export async function requestDecision(baseUrl, state, signal, fetcher = fetch) {
     try { payload = JSON.parse(data); } catch { throw new Error('The backend SSE data is not valid JSON.'); }
     if (payload.type === 'error') throw new Error('The backend model request failed. Check the backend logs.');
     if (payload.type === 'decision') return validateDecision(payload);
-    return null; // Do not display raw model thinking events.
+    if (['agent_thinking', 'agent_result'].includes(payload.type)) onEvent?.(payload);
+    return null;
   }
   try {
     while (true) {
@@ -72,7 +82,28 @@ export async function requestDecision(baseUrl, state, signal, fetcher = fetch) {
 
 export function planIntent(session, decision) {
   const { intent, answerId } = decision;
-  if (!session.aiReady) throw new Error('Complete the lights, memory room, and path puzzle before handing control to K2.');
+  const early = ['WATCH_LIGHTS', 'ENTER_LIGHTS', 'GO_MEMORY', 'ANSWER_MEMORY', 'TRY_PATH'];
+  if (!session.aiReady && !early.includes(intent)) throw new Error('K2 must complete the opening puzzles first.');
+  if (intent === 'ENTER_LIGHTS') {
+    if (session.modal !== 'lights' || session.lightPhase !== 'input') throw new Error('Lights are not ready for input.');
+    for (const light of decision.sequence) session.pressLight(light);
+    return [];
+  }
+  if (intent === 'ANSWER_MEMORY') {
+    if (session.modal !== 'memory' || session.memoryPhase !== 'input') throw new Error('Memory options are not available.');
+    session.answerMemory(decision.memoryIndex);
+    return [];
+  }
+  if (['WATCH_LIGHTS', 'GO_MEMORY', 'TRY_PATH'].includes(intent)) {
+    if (session.modal) session.dismiss();
+    const lane = {LEFT:4, CENTER:12, RIGHT:20}[decision.path];
+    const target = intent === 'WATCH_LIGHTS' ? tileAt(session.lightConsole)
+      : intent === 'GO_MEMORY' ? tileAt(session.memoryConsole) : {x:lane, y:14};
+    const path = findPath(tileAt(session.player), target, (x,y) => session.canEnter(x,y)
+      && (intent !== 'TRY_PATH' || ![9,13].includes(y) || x === lane));
+    if (!path.length || path.at(-1).x !== target.x || path.at(-1).y !== target.y) throw new Error('Puzzle target unreachable.');
+    return path.map(({x,y}) => center(x,y));
+  }
   if (intent === 'ANSWER') {
     if (!session.answer(answerId)) throw new Error('There is no document available to answer right now.');
     return [];
@@ -115,6 +146,7 @@ export class AgentController {
   constructor(session, notify, baseUrl, fetcher = fetch) {
     this.session = session; this.notify = notify; this.baseUrl = baseUrl; this.fetcher = fetcher;
     this.running = false; this.busy = false; this.route = []; this.turn = 0;
+    this.evidence = { lights: [], symbols: [], triedPaths: [] }; this.lastLight = null;
     this.generation = 0; this.cooldown = 0; this.intent = null;
   }
   get active() { return this.running || this.busy || this.route.length > 0; }
@@ -125,17 +157,21 @@ export class AgentController {
   }
   async step() {
     if (this.busy || this.route.length || this.session.gameOver) return;
-    if (!this.session.aiReady) { this.pause('Complete the lights, memory room, and path puzzle before enabling K2.'); return; }
+    if (!this.session.started) this.session.start();
     const generation = this.generation;
     this.busy = true; this.abort = new AbortController();
     const abort = this.abort;
-    const timer = setTimeout(() => abort.abort(), 30000);
-    const state = buildAgentState(this.session);
+    const timer = setTimeout(() => abort.abort(), 120000);
+    const state = buildAgentState(this.session, this.evidence);
     this.notify({ status: 'K2 is deciding the next move…' });
     try {
-      const decision = await requestDecision(this.baseUrl, state, this.abort.signal, this.fetcher);
+      const decision = await requestDecision(this.baseUrl, state, this.abort.signal, this.fetcher, (agentEvent) => {
+        if (generation === this.generation && !this.session.gameOver) this.notify({ agentEvent });
+      });
       if (generation !== this.generation || this.session.gameOver) return;
       this.intent = decision.intent;
+      this.selectedPath = decision.path;
+      if (decision.intent === 'WATCH_LIGHTS') this.evidence.lights = [];
       this.route = planIntent(this.session, decision);
       this.turn++;
       this.notify({ status: `Executing ${decision.intent}`, entry: { turn: this.turn, state, ...decision } });
@@ -152,9 +188,23 @@ export class AgentController {
   tick(delta) {
     if (!this.active) return false;
     const s = this.session;
+    if (s.lightPhase === 'playback') {
+      if (this.previousLightPhase !== 'playback') this.evidence.lights = [];
+      const light = s.activeLight;
+      if (light !== null && light !== this.lastLight) this.evidence.lights.push(light);
+      this.lastLight = light;
+    } else this.lastLight = null;
+    this.previousLightPhase = s.lightPhase;
+    if (s.memoryPhase === 'reveal') this.evidence.symbols = [...s.memorySequence];
     if (s.gameOver) { this.pause(s.won ? 'K2 has reached the exit.' : 'Run ended.'); return true; }
     // The scene advances the global clock even during network latency; human input cancels the request.
     if (this.busy) return true;
+    if (s.modal === 'lights' || s.modal === 'memory') {
+      if (s.lightPhase === 'playback' || s.memoryPhase === 'reveal') return true;
+      if (this.route.length) s.dismiss();
+      else if (this.running && !this.busy) { void this.step(); return true; }
+      else return true;
+    }
     if (s.modal) {
       this.route = [];
       if (s.modal === 'lock' && this.intent === 'GO_LOCK') s.unlock(s.doorCode);
@@ -169,10 +219,21 @@ export class AgentController {
         const ms = Math.min(Math.max(delta, 0), 100, distance / (sprint ? RUN_SPEED : WALK_SPEED) * 1000);
         const before = { ...s.player }, respawns = s.respawns;
         s.update(ms, { x: dx, y: dy, sprint });
-        if (s.respawns !== respawns) { this.pause('The player has respawned. Restart K2.'); return true; }
+        if (s.respawns !== respawns) {
+          if (this.intent === 'TRY_PATH') {
+            if (!this.evidence.triedPaths.includes(this.selectedPath)) this.evidence.triedPaths.push(this.selectedPath);
+            this.route = []; this.intent = null; this.cooldown = 0;
+            this.notify({status: `False path: ${this.selectedPath}. K2 will choose another corridor.`});
+          } else this.pause('The player has respawned. Restart K2.');
+          return true;
+        }
         if (s.player.x === before.x && s.player.y === before.y && !s.modal) this.pause('Movement blocked. Paused.');
       }
       return true;
+    }
+    if (['WATCH_LIGHTS', 'GO_MEMORY'].includes(this.intent)) {
+      s.interact(); this.intent = null;
+      if (s.modal) return true;
     }
     if (this.running) {
       this.cooldown -= delta;

@@ -15,7 +15,7 @@
       <p class="controls">WASD / Arrow keys: Move · SHIFT: Run · F: Interact · R: Restart <span>Approach the locked door or touch the document to interact</span></p>
       <section class="agent-panel" aria-label="K2 player controls">
         <h2>K2 PLAYER</h2>
-        <p class="note">Complete the lights, memory room, and path puzzle first. K2 can then take over. The 60-second clock continues during requests.</p>
+        <p class="note">K2 starts automatically and plays every room. The game clock pauses while agents deliberate; movement and puzzle playback still count.</p>
         <label for="backend-url">Backend URL</label>
         <input id="backend-url" type="url" value="http://127.0.0.1:8000" />
         <div class="agent-controls">
@@ -32,6 +32,8 @@
       <p id="dialog-timer" class="clock">TIME LEFT 60.0s</p>
       <p class="eyebrow" id="dialog-label">ACCESS CONTROL</p>
       <h1 id="dialog-title">Enter access code</h1>
+      <p id="dialog-agent-status" role="status"></p>
+      <ol id="dialog-agent-log" aria-label="Live K2 workflow"></ol>
       <section id="light-panel" hidden>
         <p>Watch five flashes, then enter the sequence here. Colors may repeat. A wrong sequence replays the lights while time keeps running.</p>
         <div class="light-preview" aria-label="Light sequence preview">
