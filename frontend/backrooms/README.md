@@ -1,4 +1,4 @@
-# Backrooms Escape — 60 Seconds
+# Backrooms Escape — 3 Minutes
 
 A standalone Phaser / Vite game in `frontend/backrooms`.
 
@@ -19,7 +19,7 @@ npm run build
 
 ## Play
 
-- Click **START** to begin a 60-second run. WASD / arrows move, Shift runs, F interacts, R restarts.
+- Click **START** to begin a 180-second run. WASD / arrows move, Shift runs, F interacts, R restarts.
 - Approach **C** and press F. Watch five random flashes, then enter them using the console buttons. Repeated colors are allowed. Incorrect input replays the sequence.
 - Crossing gate **A** reveals five symbols for three seconds. At **R**, press F and choose the correct order. An incorrect choice reveals the symbols again. All three passage gates stay closed until solved.
 - Choose **LEFT / CENTER / RIGHT**. One corridor is randomly valid. The other two look normal but cause static and return you to the entrance. Time is not restored.
@@ -28,9 +28,9 @@ npm run build
 - At **D**, answer a generated calculus question: chain rule, substitution integration, limits, or polynomial derivatives. The three answer positions are shuffled.
 - Both answers open **G**. A wrong answer wakes the monster. Use the three **S** shelters to break sight and let it patrol away.
 - Reach **E** before the countdown ends to see **YOU ESCAPED**.
-- Timeout or capture shows **YOU DIED** for two seconds, then automatically starts a fresh randomized session. Manual restart also generates fresh values.
+- Timeout or capture shows **YOU DIED** for two seconds, then waits for Start K2 to retry with a fresh randomized session. Manual restart also generates fresh values.
 
-The clock continues during dialogs and retries, but pauses during an active K2 model request. It uses elapsed wall-clock time, independent of the movement delta clamp; background time is deducted when rendering resumes. Winning freezes the clock. START prevents the initial run from expiring while you read the instructions.
+The clock starts when Start K2 is pressed and continues during dialogs, retries, and all model requests. It uses elapsed wall-clock time, independent of the movement delta clamp; background time is deducted when rendering resumes. Winning freezes the clock. START prevents the initial run from expiring while you read the instructions.
 
 ## Music
 
@@ -40,7 +40,7 @@ Enable **Jaws music** to authorize browser playback. A two-second preview confir
 
 Run the FastAPI service in `backend/` at port 8000. Keep API credentials in `backend/.env`; never put them in a VITE variable.
 
-K2 starts automatically when the page loads or the run restarts. **Let K2 Play** resumes after a pause. It controls every room: lights, memory, path trials, key, lock, calculus document, and exit. Each decision runs Explorer, Survival, Navigator, then Supervisor, with live reports in the panel. The controller records lights during playback and symbols during reveal; K2 receives these observations and chooses the inputs. Path failures are remembered and retried without reading the hidden correct corridor. The 60-second clock pauses during model requests, but movement and puzzle playback still count. **K2 Step** runs a single goal; use continuous play for the full demonstration.
+The page waits for Start K2 before beginning an autonomous run. **Let K2 Play** resumes after a pause. It controls every room: lights, memory, path trials, key, lock, calculus document, and exit. Each decision runs Explorer, Survival, Navigator, then Supervisor, with live reports in the panel. The controller records lights during playback and symbols during reveal; K2 receives these observations and chooses the inputs. Path failures are remembered and retried without reading the hidden correct corridor. The 180-second wall-clock limit includes model requests, movement, and puzzle playback. **K2 Step** runs a single goal; use continuous play for the full demonstration.
 
 `POST /agent/decide` returns SSE `decision` events. The frontend validates intent and answer IDs, executes movement through the normal collision functions, and cancels requests on manual takeover, death, or restart. K2 receives the visible question (including its expression) without the answer key. Its navigation is game-engine BFS, not model discovery of an unknown map.
 

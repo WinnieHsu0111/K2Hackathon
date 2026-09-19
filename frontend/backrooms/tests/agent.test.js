@@ -14,6 +14,7 @@ const ready = () => { const s = new GameSession(); s.start(); s.firstGateOpen = 
 test('observation excludes hidden map, monster coordinates, quiz solution', () => {
   const s = new GameSession();
   const o = getObservation(s);
+  assert.deepEqual(buildAgentState(s).visibleTiles, o.surroundings);
   assert.equal(o.goal.exitVisible, false);
   assert.deepEqual(buildAgentState(s).monsterTile, {});
   assert(!o.surroundings.some(t => ['K','M','E'].includes(t.tile)));
@@ -74,7 +75,7 @@ test('backend failure stops auto mode and preserves player state', async () => {
 test('deadline kills the run during a pending request and late decision cannot move it', async () => {
   const s = ready(); let resolve;
   const c = new AgentController(s, () => {}, 'http://test', () => new Promise(r => {resolve=r;}));
-  const request=c.step();s.advanceTime(60000);c.tick(16);
+  const request=c.step();s.advanceTime(180000);c.tick(16);
   resolve(response(decision('GO_KEY')));await request;
   assert(s.dead);assert(!c.active);assert(!s.hasKey);assert.equal(c.route.length,0);
 });

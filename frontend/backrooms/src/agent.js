@@ -11,6 +11,8 @@ export function buildAgentState(session, evidence = {}) {
     observedLights: evidence.lights || [], observedSymbols: evidence.symbols || [],
     memoryOptions: session.modal === 'memory' && session.memoryPhase === 'input' ? session.memoryOptions : [],
     triedPaths: evidence.triedPaths || [],
+    recentOutcomes: evidence.outcomes || [],
+    visibleTiles: observation.surroundings,
     atDocument: session.modal === 'document',
     hasKey: session.hasKey, lockOpen: session.lockOpen, gateOpen: session.gateOpen,
     documentAnswered: session.documentAnswered,
@@ -94,6 +96,7 @@ export function planIntent(session, decision) {
     session.answerMemory(decision.memoryIndex);
     return [];
   }
+  if (intent === 'WATCH_LIGHTS' && session.modal === 'lights') return [];
   if (['WATCH_LIGHTS', 'GO_MEMORY', 'TRY_PATH'].includes(intent)) {
     if (session.modal) session.dismiss();
     const lane = {LEFT:4, CENTER:12, RIGHT:20}[decision.path];
@@ -146,7 +149,7 @@ export class AgentController {
   constructor(session, notify, baseUrl, fetcher = fetch) {
     this.session = session; this.notify = notify; this.baseUrl = baseUrl; this.fetcher = fetcher;
     this.running = false; this.busy = false; this.route = []; this.turn = 0;
-    this.evidence = { lights: [], symbols: [], triedPaths: [] }; this.lastLight = null;
+    this.evidence = { lights: [], symbols: [], triedPaths: [], outcomes: [] }; this.lastLight = null;
     this.generation = 0; this.cooldown = 0; this.intent = null;
   }
   get active() { return this.running || this.busy || this.route.length > 0; }
@@ -159,23 +162,29 @@ export class AgentController {
     if (this.busy || this.route.length || this.session.gameOver) return;
     if (!this.session.started) this.session.start();
     const generation = this.generation;
+    this.thinkingSince = performance.now();
+    this.agentStages = {};
     this.busy = true; this.abort = new AbortController();
     const abort = this.abort;
     const timer = setTimeout(() => abort.abort(), 120000);
     const state = buildAgentState(this.session, this.evidence);
+    this.lastObservation = state.visibleTiles;
     this.notify({ status: 'K2 is deciding the next move…' });
     try {
       const decision = await requestDecision(this.baseUrl, state, this.abort.signal, this.fetcher, (agentEvent) => {
-        if (generation === this.generation && !this.session.gameOver) this.notify({ agentEvent });
+        if (generation === this.generation && !this.session.gameOver) {
+          this.agentStages[agentEvent.agent] = agentEvent.type === 'agent_result' ? 'done' : 'working';
+          this.notify({ agentEvent });
+        }
       });
       if (generation !== this.generation || this.session.gameOver) return;
       this.intent = decision.intent;
       this.selectedPath = decision.path;
-      if (decision.intent === 'WATCH_LIGHTS') this.evidence.lights = [];
+      // Preserve observations collected while approaching during this request.
       this.route = planIntent(this.session, decision);
       this.turn++;
       this.notify({ status: `Executing ${decision.intent}`, entry: { turn: this.turn, state, ...decision } });
-      this.cooldown = 1200;
+      this.cooldown = 0;
     } catch (error) {
       if (generation === this.generation) this.pause(error.name === 'AbortError'
         ? 'K2 request timed out. Paused.' : `${error.message} Make sure the backend is running.`);
@@ -184,7 +193,17 @@ export class AgentController {
       if (generation === this.generation) { this.busy = false; this.abort = null; }
     }
   }
-  start() { if (this.active) return; this.running = true; void this.step(); }
+  start() {
+    if (this.active) return;
+    this.running = true;
+    if (!this.session.started) this.session.start();
+    if (!this.session.firstGateOpen && !this.session.modal && !this.session.gameOver) {
+      this.intent = 'WATCH_LIGHTS';
+      this.route = planIntent(this.session, {intent:'WATCH_LIGHTS'});
+      this.notify({status:'Approaching console C to collect observations before requesting K2.',
+        agentEvent:{type:'agent_result', agent:'Game engine', content:'Startup navigation only: collect the visible light sequence first. Then all K2 specialists analyze it; no puzzle answer is supplied by the engine.'}});
+    } else void this.step();
+  }
   tick(delta) {
     if (!this.active) return false;
     const s = this.session;
@@ -198,7 +217,10 @@ export class AgentController {
     if (s.memoryPhase === 'reveal') this.evidence.symbols = [...s.memorySequence];
     if (s.gameOver) { this.pause(s.won ? 'K2 has reached the exit.' : 'Run ended.'); return true; }
     // The scene advances the global clock even during network latency; human input cancels the request.
-    if (this.busy) return true;
+    if (!this.route.length && this.intent === 'WATCH_LIGHTS' && !s.modal) {
+      s.interact(); this.intent = null;
+    }
+    if (this.busy && !this.route.length) return true;
     if (s.modal === 'lights' || s.modal === 'memory') {
       if (s.lightPhase === 'playback' || s.memoryPhase === 'reveal') return true;
       if (this.route.length) s.dismiss();
@@ -222,6 +244,8 @@ export class AgentController {
         if (s.respawns !== respawns) {
           if (this.intent === 'TRY_PATH') {
             if (!this.evidence.triedPaths.includes(this.selectedPath)) this.evidence.triedPaths.push(this.selectedPath);
+            this.evidence.outcomes.push(`TRY_PATH ${this.selectedPath} failed: returned to corridor entrance. Choose a different path.`);
+            this.evidence.outcomes = this.evidence.outcomes.slice(-6);
             this.route = []; this.intent = null; this.cooldown = 0;
             this.notify({status: `False path: ${this.selectedPath}. K2 will choose another corridor.`});
           } else this.pause('The player has respawned. Restart K2.');

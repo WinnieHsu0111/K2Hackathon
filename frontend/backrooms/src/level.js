@@ -95,7 +95,7 @@ export class GameSession {
   constructor({ rng = Math.random } = {}) {
     Object.assign(this, generatePuzzles(rng));
     this.started = false;
-    this.timeLeft = 60000;
+    this.timeLeft = 180000;
     this.dead = false;
     this.deathReason = null;
     this.memorySolved = false;
@@ -152,7 +152,7 @@ export class GameSession {
     this.deathReason = reason;
     this.monsterActive = false;
     this.modal = null;
-    this.message = `YOU DIED · ${reason}. Generating a new session...`;
+    this.message = `YOU DIED · ${reason}. Press Start K2 to retry.`;
   }
 
   // Called once per rendered frame with real elapsed time, outside movement / AI code.

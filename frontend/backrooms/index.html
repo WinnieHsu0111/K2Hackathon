@@ -3,19 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Backrooms — 60 Seconds</title>
+    <title>Backrooms — 3 Minutes</title>
   </head>
   <body>
     <main>
-      <header><span>BACKROOMS</span><span>60 SECONDS TO ESCAPE</span></header>
-      <section id="start-screen"><h1>BACKROOMS ESCAPE</h1><p>60 seconds. Fresh puzzles every run. Solve the lights, remember the symbols, test the paths, and find the exit.</p><button id="start-game" type="button">START · 60 SECONDS</button></section>
-      <div class="telemetry"><strong id="timer">60.0s</strong><span id="inventory">KEY —</span><span id="threat">No threats detected</span><button id="sound-toggle" type="button" aria-pressed="false">Jaws music: Off</button></div>
+      <header><span>BACKROOMS</span><span>3 MINUTES TO ESCAPE</span></header>
+      <div class="k2-start-bar"><button id="start-k2-run" type="button">▶ Start K2</button><span id="run-status" role="status">Ready — press Start K2</span></div>
+      <section id="start-screen"><h1>BACKROOMS ESCAPE</h1><p>180 seconds. Fresh puzzles every run. Solve the lights, remember the symbols, test the paths, and find the exit.</p><button id="start-game" type="button">START · 3 MINUTES</button></section>
+      <div class="telemetry"><strong id="timer">180.0s</strong><span id="inventory">KEY —</span><span id="threat">No threats detected</span><button id="sound-toggle" type="button" aria-pressed="false">Jaws music: Off</button></div>
+      <p id="scan-status" role="status">Ready</p>
+      <p id="observation-status" role="status">OBSERVATION — waiting for the first K2 request</p>
+      <p id="movement-status" role="status">Route appears when K2 chooses a destination.</p>
       <div id="game" tabindex="0" aria-label="Backrooms game. WASD or arrow keys to move, Shift to run, F to interact with nearby light buttons or the console, R to restart."></div>
       <p id="status" role="status">The first gate requires a light sequence. Approach console C and press F to play it.</p>
       <p class="controls">WASD / Arrow keys: Move · SHIFT: Run · F: Interact · R: Restart <span>Approach the locked door or touch the document to interact</span></p>
       <section class="agent-panel" aria-label="K2 player controls">
         <h2>K2 PLAYER</h2>
-        <p class="note">K2 starts automatically and plays every room. The game clock pauses while agents deliberate; movement and puzzle playback still count.</p>
+        <p class="note">Press Start K2 to begin. K2 plays every room; all thinking, movement, and playback count toward 180 seconds. Press Pause to take manual control.</p>
         <label for="backend-url">Backend URL</label>
         <input id="backend-url" type="url" value="http://127.0.0.1:8000" />
         <div class="agent-controls">
@@ -29,9 +33,10 @@
       </section>
     </main>
     <dialog id="interaction" aria-labelledby="dialog-title">
-      <p id="dialog-timer" class="clock">TIME LEFT 60.0s</p>
+      <p id="dialog-timer" class="clock">TIME LEFT 180.0s</p>
       <p class="eyebrow" id="dialog-label">ACCESS CONTROL</p>
       <h1 id="dialog-title">Enter access code</h1>
+      <p id="dialog-scan-status" role="status">Ready</p>
       <p id="dialog-agent-status" role="status"></p>
       <ol id="dialog-agent-log" aria-label="Live K2 workflow"></ol>
       <section id="light-panel" hidden>

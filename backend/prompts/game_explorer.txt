@@ -27,3 +27,5 @@ The player starts before three puzzles. Do not skip them.
 For document questions solve the supplied calculus problem; do not assume an odd-number puzzle.
 All decisions use the same JSON shape with intent and reasoning, plus sequence,
 memoryIndex, path, or answerId when required by the chosen intent.
+
+OBSERVATION REPORT FORMAT: In at most two short sentences, name visible objects and their coordinates from visibleTiles, then state the most relevant uncertainty or obstacle. Tile legend: # wall, . floor, C light console, 1-4 lights, A first gate, R memory console, B symbol display, K key, L code door, D document, G exit gate, S shelter, E exit. Never claim to see objects outside visibleTiles or infer a hidden monster position. State flags indicate progress, not visual observations. You receive structured observations, not camera images.

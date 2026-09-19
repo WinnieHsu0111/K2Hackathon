@@ -76,3 +76,13 @@ dialog { max-height: 94vh; overflow-y: auto; }
 #dialog-agent-status { color: #c3bfff; font-weight: bold; }
 #dialog-agent-log { max-height: 130px; overflow-y: auto; list-style: none; padding: 0; border-left: 2px solid #8b87d7; }
 #dialog-agent-log li { padding: 5px 10px; font-size: 12px; }
+
+.k2-start-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 14px 0; }
+.k2-start-bar button { width: auto; background: #c3bfff; color: #171528; font-weight: bold; padding: 12px 22px; }
+.k2-start-bar span { font-size: 13px; color: #ddd6bb; }
+
+#movement-status { color: #7effe4; border-left: 3px solid #7effe4; padding: 10px 12px; background: #13231e; font-size: 13px; line-height: 1.6; }
+
+#observation-status { color: #e8cc70; padding: 8px 12px; background: #242116; font-size: 12px; line-height: 1.5; }
+
+#scan-status, #dialog-scan-status { color: #e8cc70; font-size: 13px; padding: 8px; border-left: 3px solid #e8cc70; background: #242116; }

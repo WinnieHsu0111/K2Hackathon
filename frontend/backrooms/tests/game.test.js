@@ -68,8 +68,8 @@ test('fresh puzzles and all four calculus categories have three distinct choices
   assert.equal(categories.size,4);assert.equal(answers.size,3);assert.equal(fingerprints.size,200);
 });
 test('no countdown before start; deadline advances through dialogs and long stalled frames',()=>{
-  const s=new GameSession();s.advanceTime(100000);assert.equal(s.timeLeft,60000);
-  s.start();s.modal='lights';s.advanceTime(59000);assert.equal(s.timeLeft,1000);
+  const s=new GameSession();s.advanceTime(100000);assert.equal(s.timeLeft,180000);
+  s.start();s.modal='lights';s.advanceTime(179000);assert.equal(s.timeLeft,1000);
   s.advanceTime(1000);assert(s.dead);assert.equal(s.deathReason,'TIME OUT');assert.equal(s.modal,null);
   const before={...s.player};s.update(100,{x:1});assert.deepEqual(s.player,before);
 });
@@ -82,7 +82,7 @@ test('light retry replays sequence, consumes clock, and blocks premature input',
   const s=newRun();s.player={...s.lightConsole};s.interact();assert(!s.pressLight(1));
   s.advanceTime(4900);const wrong=s.lightSequence.map(id=>id%4+1);wrong.forEach(id=>s.pressLight(id));
   assert.equal(s.lightPhase,'playback');assert(!s.firstGateOpen);assert.equal(s.lightInput.length,0);
-  s.advanceTime(4900);s.lightSequence.forEach(id=>s.pressLight(id));assert(s.firstGateOpen);assert.equal(s.timeLeft,50200);
+  s.advanceTime(4900);s.lightSequence.forEach(id=>s.pressLight(id));assert(s.firstGateOpen);assert.equal(s.timeLeft,170200);
 });
 test('memory barrier, 3-second reveal, wrong-answer replay and correct unlock',()=>{
   const s=newRun();s.firstGateOpen=true;s.player={...s.memoryConsole};assert(!s.canEnter(12,9));s.interact();
@@ -94,7 +94,7 @@ test('wrong corridor returns to entrance without regenerating answers or restori
   const s=newRun();s.memorySolved=true;s.firstGateOpen=true;s.memorySeen=true;
   const wrong=[4,12,20].find(x=>s.cell(x,13)==='X');s.player=center(wrong,12);const code=s.doorCode;
   tick(s,100,{y:1,sprint:true});tick(s,100,{y:1,sprint:true});
-  assert.deepEqual(s.player,s.wrongPathRespawn);assert.equal(s.respawns,1);assert.equal(s.doorCode,code);assert.equal(s.timeLeft,59800);
+  assert.deepEqual(s.player,s.wrongPathRespawn);assert.equal(s.respawns,1);assert.equal(s.doorCode,code);assert.equal(s.timeLeft,179800);
 });
 test('full timed winning route is feasible for all three randomized path choices',()=>{
   const paths=new Set();
@@ -118,7 +118,7 @@ test('wrong calculus answer opens gate and awakens monster; capture ends the run
   const s=newRun();toDocument(s);const wrong=s.question.options.find(o=>o.id!==s.question.correctId).id;
   assert(s.answer(wrong));assert(s.gateOpen&&s.monsterActive);assert(!s.answer(s.question.correctId));
   s.player={...s.monster};s.wakeRemaining=0;s.updateMonster(16);assert(s.dead);assert.equal(s.deathReason,'CAUGHT BY THE MONSTER');
-  const fresh=newRun(999);assert.equal(fresh.timeLeft,60000);assert(!fresh.hasKey&&!fresh.gateOpen&&!fresh.firstGateOpen);assert.notEqual(fresh.doorCode,s.doorCode);
+  const fresh=newRun(999);assert.equal(fresh.timeLeft,180000);assert(!fresh.hasKey&&!fresh.gateOpen&&!fresh.firstGateOpen);assert.notEqual(fresh.doorCode,s.doorCode);
 });
 test('safe zones exclude monster and send it on patrol; leaving unseen does not auto-chase',()=>{
   const s=newRun();s.player=center(5,23);s.monsterActive=true;s.monster.state=MONSTER_STATE.CHASE;s.monster.x=center(9,23).x;s.monster.y=center(9,23).y;

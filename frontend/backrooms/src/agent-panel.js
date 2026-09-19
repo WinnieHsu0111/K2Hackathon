@@ -1,6 +1,7 @@
 import { AgentController } from './agent.js';
+import { tileAt } from './level.js';
 
-export function createAgentPanel(session, restart) {
+export function createAgentPanel(session, restart, autoStart = false) {
   const el = (id) => document.getElementById(id);
   let controller;
   const log = el('agent-log');
@@ -39,6 +40,12 @@ export function createAgentPanel(session, restart) {
         done ? agentEvent.content : agentEvent.message, done ? 'report' : 'working');
     }
     if (entry) addCard('Supervisor', `Turn ${entry.turn}: ${entry.intent}${entry.answerId ? ` (${entry.answerId})` : ''}`, entry.reason, 'decision');
+    if (entry && controller.route.length) {
+      const points = [entry.state.playerTile, ...controller.route.map(tileAt)];
+      const corners = points.filter((p, i) => i === 0 || i === points.length - 1 ||
+        (p.x - points[i-1].x !== points[i+1].x - p.x || p.y - points[i-1].y !== points[i+1].y - p.y));
+      addCard('Game engine', 'Movement route', corners.map(p => `(${p.x}, ${p.y})`).join(' → '), 'report');
+    }
   };
   const baseUrl = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
   el('backend-url').value = baseUrl;
@@ -58,12 +65,45 @@ export function createAgentPanel(session, restart) {
   el('ai-pause').onclick = () => controller.pause();
   el('dialog-ai-pause').onclick = () => controller.pause();
   el('ai-reset').onclick = () => { controller.pause(); restart(); };
-  notify({ status: 'K2 is starting an autonomous run from the first room.' });
-  // Start immediately so the clock cannot run before the first model request.
-  if (configure()) controller.start();
+  el('start-k2-run').onclick = () => {
+    if (!session.started) { if (configure()) controller.start(); }
+    else { controller.pause(); restart(); }
+  };
+  notify({ status: 'Ready. Press Start K2. Thinking time counts toward the 180-second limit.' });
+  if (autoStart && configure()) controller.start();
   return {
     controller,
     sync() {
+      const visible = controller.lastObservation;
+      const names = {C:'Light console',R:'Memory console',A:'First gate',B:'Symbols',K:'Key',L:'Code door',D:'Document',G:'Exit gate',S:'Shelter',E:'Exit','1':'Red light','2':'Blue light','3':'Green light','4':'Yellow light'};
+      if (visible) {
+        const objects = visible.filter(t => names[t.tile]);
+        el('observation-status').textContent = `LAST OBSERVATION SENT TO K2 · ${visible.length} visible cells · ${objects.length ? objects.map(t => `${names[t.tile]} (${t.x}, ${t.y})`).join(' · ') : 'Only walls and floor; no visible interactable object'}`;
+      }
+      const position = tileAt(session.player);
+      const activity = controller.busy ? `Scanning nearby cells · waiting ${(Math.max(0,performance.now() - controller.thinkingSince)/1000).toFixed(1)}s · ` +
+        ['Explorer','Survival','Navigator','Supervisor'].map(name => `${name}: ${controller.agentStages?.[name] || 'pending'}`).join(' / ')
+        : controller.active ? 'Executing the selected action' : 'Ready';
+      el('scan-status').textContent = activity;
+      el('dialog-scan-status').textContent = activity;
+      const targets = {WATCH_LIGHTS:'Light console C',GO_MEMORY:'Memory console R',TRY_PATH:`${controller.selectedPath || ''} corridor`,GO_KEY:'Key K',GO_LOCK:'Code door L',GO_DOCUMENT:'Document D',GO_SAFE:'Safe zone S',GO_EXIT:'Exit E'};
+      const name = targets[controller.intent] || controller.intent || 'next goal';
+      if (controller.route.length) {
+        const next = tileAt(controller.route[0]);
+        const goal = tileAt(controller.route.at(-1));
+        el('movement-status').textContent = `MOVING → ${name} | Now (${position.x}, ${position.y}) → Next (${next.x}, ${next.y}) → Target (${goal.x}, ${goal.y}) | ${controller.route.length} waypoints left`;
+      } else {
+        el('movement-status').textContent = session.gameOver ? 'Run ended.' : controller.busy
+          ? `THINKING at (${position.x}, ${position.y}) — waiting for the next destination`
+          : session.modal ? `INTERACTING at (${position.x}, ${position.y}) — ${session.modal}`
+          : 'Route appears when K2 chooses a destination.';
+      }
+      el('run-status').textContent = !session.started ? 'Ready — press Start K2'
+        : session.gameOver ? (session.won ? 'Escaped' : 'Run ended — press Start K2 to retry')
+        : controller.busy && controller.route.length ? 'Running · moving + K2 thinking'
+        : controller.busy ? 'Running · K2 thinking · timer active'
+        : controller.active ? 'Running · K2 executing' : 'Manual control · timer active';
+      el('start-k2-run').textContent = session.started ? '↻ Restart K2' : '▶ Start K2';
       el('dialog-agent-status').textContent = controller.active
         ? `K2 is playing automatically — no input needed. ${el('agent-status').textContent}`
         : 'K2 is paused. Press Let K2 Play to resume.';

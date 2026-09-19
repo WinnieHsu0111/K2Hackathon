@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { GameSession, MAP, TILE, MONSTER_STATE, LIGHTS, LIGHT_COLORS } from './level.js';
 import { createThreatAudio } from './audio.js';
 import './style.css';
+import { getObservation } from './observation.js';
 import { SYMBOLS } from './puzzles.js';
 import { createAgentPanel } from './agent-panel.js';
 
@@ -13,19 +14,19 @@ class GameUI {
     this.dialog = byId('interaction');
     this.currentModal = null;
     byId('lock-form').onsubmit = (event) => {
-      event.preventDefault(); this.onManual?.();
+      event.preventDefault(); if (this.isAutonomous?.()) return;
       if (this.session.unlock(byId('door-code').value)) this.close();
       else { byId('lock-error').textContent = 'ACCESS DENIED. Check the four-digit code on your key.'; byId('door-code').select(); }
     };
-    byId('close-dialog').onclick = () => { this.onManual?.(); this.close(); };
-    byId('replay-lights').onclick = () => { this.onManual?.(); this.session.playLightSequence(); };
-    this.dialog.oncancel = (event) => { event.preventDefault(); this.onManual?.(); this.close(); };
+    byId('close-dialog').onclick = () => { if (this.isAutonomous?.()) return; this.close(); };
+    byId('replay-lights').onclick = () => { if (this.isAutonomous?.()) return; this.session.playLightSequence(); };
+    this.dialog.oncancel = (event) => { event.preventDefault(); if (this.isAutonomous?.()) return; this.close(); };
     byId('start-game').onclick = () => this.session.start();
     byId('restart-dialog').onclick = () => this.onRestart?.();
     byId('light-input').replaceChildren(...Object.entries(LIGHTS).map(([id, color]) => {
       const button = document.createElement('button');
       button.type = 'button'; button.textContent = `${id} ${color}`;
-      button.onclick = () => this.session.pressLight(Number(id));
+      button.onclick = () => { if (!this.isAutonomous?.()) this.session.pressLight(Number(id)); };
       return button;
     }));
   }
@@ -37,14 +38,14 @@ class GameUI {
     byId('answers').replaceChildren(...question.options.map((option) => {
       const button = document.createElement('button'); button.type = 'button';
       button.textContent = `${option.id}. ${option.value}`;
-      button.onclick = () => { this.onManual?.(); if (session.answer(option.id)) this.close(); };
+      button.onclick = () => { if (this.isAutonomous?.()) return; if (session.answer(option.id)) this.close(); };
       return button;
     }));
     byId('memory-answers').replaceChildren(...session.memoryOptions.map((sequence, index) => {
       const button = document.createElement('button'); button.type = 'button';
       button.textContent = sequence.map((item) => SYMBOLS[item]).join('  ');
       button.setAttribute('aria-label', sequence.join(', '));
-      button.onclick = () => session.answerMemory(index);
+      button.onclick = () => { if (!this.isAutonomous?.()) session.answerMemory(index); };
       return button;
     }));
   }
@@ -60,7 +61,7 @@ class GameUI {
     const time = `${(s.timeLeft / 1000).toFixed(1)}s`;
     updateText(byId('timer'), time); updateText(byId('dialog-timer'), `TIME LEFT ${time}`);
     byId('timer').dataset.urgent = String(s.timeLeft <= 15000);
-    byId('start-screen').hidden = s.started;
+    byId('start-screen').hidden = true;
     updateText(byId('inventory'), !s.firstGateOpen ? `LIGHT CODE ${s.lightInput.length}/5`
       : !s.memorySolved ? 'MEMORY ROOM' : !s.pathSolved ? 'CHOOSE A PATH' : s.hasKey ? `KEY ✓ / CODE ${s.doorCode}` : 'FIND THE KEY');
     let threat = 'No threats detected';
@@ -120,9 +121,9 @@ class Backrooms extends Phaser.Scene {
     this.keys = this.input.keyboard.addKeys('W,A,S,D,SHIFT,R,F');
     this.lightButtons = {};
     ui.bind(this.session, this.input.keyboard);
-    this.agentPanel = createAgentPanel(this.session, () => this.scene.restart({ autoStart: true }));
+    this.agentPanel = createAgentPanel(this.session, () => this.scene.restart({ autoStart: true }), Boolean(data.autoStart));
     ui.onRestart = () => this.scene.restart({ autoStart: true });
-    ui.onManual = () => { if (this.agentPanel.controller.active) this.agentPanel.controller.pause('Manual interaction has taken over.'); };
+    ui.isAutonomous = () => this.agentPanel.controller.active;
     byId('backend-url').onfocus = () => { this.input.keyboard.resetKeys(); this.input.keyboard.enabled = false; };
     byId('backend-url').onblur = () => { this.input.keyboard.resetKeys(); this.input.keyboard.enabled = !this.session.modal; };
     this.events.once('shutdown', () => { this.agentPanel.destroy(); ui.close(); });
@@ -218,6 +219,11 @@ class Backrooms extends Phaser.Scene {
       texture.refresh();
     }
     this.darkness = this.add.image(this.player.x, this.player.y, 'darkness').setDepth(10);
+    // Spectator overlay: visualize engine waypoints without exposing them to K2.
+    this.observationOverlay = this.add.graphics().setDepth(11);
+    this.scanOverlay = this.add.graphics().setDepth(11);
+    this.routeOverlay = this.add.graphics().setDepth(12);
+    this.routeTarget = this.add.text(0, 0, 'TARGET', {fontFamily:'monospace',fontSize:'12px',color:'#7effe4',backgroundColor:'#111b18',padding:{x:5,y:3}}).setDepth(12).setOrigin(0.5,1).setVisible(false);
     if (!this.textures.exists('static-noise')) {
       const noise = this.textures.createCanvas('static-noise', 160, 96);
       const pixels = noise.context.createImageData(160, 96);
@@ -235,6 +241,50 @@ class Backrooms extends Phaser.Scene {
   renderState() {
     const state = this.session;
     this.player.setPosition(state.player.x, state.player.y);
+    const controller = this.agentPanel.controller;
+    const route = controller.route;
+    const scanNow = performance.now();
+    if (controller.active && (!this.lastScanAt || scanNow - this.lastScanAt > 250)) {
+      controller.liveObservation = getObservation(state).surroundings;
+      this.lastScanAt = scanNow;
+    }
+    this.scanOverlay.clear();
+    if (controller.busy && !state.gameOver) {
+      const angle = scanNow / 650;
+      const visible = controller.liveObservation || [];
+      for (const cell of visible) {
+        const x = (cell.x + 0.5)*TILE, y = (cell.y + 0.5)*TILE;
+        const bearing = Math.atan2(y-state.player.y, x-state.player.x);
+        const diff = Math.atan2(Math.sin(bearing-angle), Math.cos(bearing-angle));
+        if (Math.abs(diff) < 0.45) {
+          this.scanOverlay.fillStyle(0xe8cc70, 0.24*(1-Math.abs(diff)/0.45));
+          this.scanOverlay.fillRect(cell.x*TILE+3, cell.y*TILE+3, TILE-6, TILE-6);
+        }
+      }
+      this.scanOverlay.lineStyle(2,0xe8cc70,0.9);
+      this.scanOverlay.lineBetween(state.player.x,state.player.y,state.player.x+22*Math.cos(angle),state.player.y+22*Math.sin(angle));
+      this.scanOverlay.strokeCircle(state.player.x,state.player.y,18);
+    }
+    this.observationOverlay.clear();
+    this.observationOverlay.lineStyle(1, 0xe8cc70, 0.35);
+    for (const cell of this.agentPanel.controller.lastObservation || []) {
+      this.observationOverlay.strokeRect(cell.x*TILE+2, cell.y*TILE+2, TILE-4, TILE-4);
+    }
+    this.routeOverlay.clear();
+    this.routeTarget.setVisible(route.length > 0 && !state.gameOver);
+    if (route.length && !state.gameOver) {
+      this.routeOverlay.lineStyle(3, 0x7effe4, 0.8);
+      this.routeOverlay.beginPath();
+      this.routeOverlay.moveTo(state.player.x, state.player.y);
+      for (const point of route) this.routeOverlay.lineTo(point.x, point.y);
+      this.routeOverlay.strokePath();
+      this.routeOverlay.fillStyle(0x7effe4, 0.8);
+      for (const point of route) this.routeOverlay.fillCircle(point.x, point.y, 3);
+      const target = route.at(-1);
+      this.routeOverlay.strokeCircle(target.x, target.y, 12);
+      this.routeOverlay.strokeCircle(state.player.x, state.player.y, 13);
+      this.routeTarget.setPosition(target.x, target.y - 17);
+    }
     this.darkness.setPosition(state.player.x, state.player.y);
     this.keyMarker.setVisible(!state.hasKey);
     this.paper.setAlpha(state.documentAnswered ? 0.35 : 1);
@@ -259,7 +309,7 @@ class Backrooms extends Phaser.Scene {
     }
     if (state.gameOver && !this.finished) {
       this.finished = true;
-      this.add.text(480, 288, state.dead ? `YOU DIED\n${state.deathReason}\n\nNew session in 2 seconds` : 'YOU ESCAPED\n\nPress R to restart', {
+      this.add.text(480, 288, state.dead ? `YOU DIED\n${state.deathReason}\n\nPress Start K2 to retry` : 'YOU ESCAPED\n\nPress R to restart', {
         fontFamily: 'monospace', fontSize: '26px', align: 'center', color: '#eee6ba',
         backgroundColor: '#171710', padding: { x: 28, y: 24 },
       }).setOrigin(0.5).setScrollFactor(0).setDepth(20);
@@ -271,23 +321,21 @@ class Backrooms extends Phaser.Scene {
 
   update(_time, delta) {
     const now = performance.now();
-    // Pause the demo deadline during real model calls, not during puzzle playback or movement.
-    if (!this.agentPanel.controller.busy) this.session.advanceTime(now - this.lastClock);
+    // Benchmark wall-clock time includes model requests.
+    this.session.advanceTime(now - this.lastClock);
     this.lastClock = now;
     const agent = this.agentPanel.controller;
     if (this.session.dead) {
-      if (agent.active) agent.pause('Run ended. New session incoming.');
+      if (agent.active) agent.pause('Run ended. Press Start K2 to retry.');
       this.deathShownAt ??= now;
       this.renderState();
-      if (now - this.deathShownAt >= 2000) this.scene.restart({ autoStart: true });
+
       return;
     }
     if (!this.session.started) { this.renderState(); return; }
     const typing = document.activeElement?.matches('input, textarea');
-    const humanInput = !typing && this.input.keyboard.enabled &&
-      [this.keys.W, this.keys.A, this.keys.S, this.keys.D, this.keys.F, this.keys.R,
-        this.cursors.up, this.cursors.down, this.cursors.left, this.cursors.right].some((key) => key.isDown);
-    if (humanInput && agent.active) agent.pause('Manual control has taken over. K2 paused.');
+    // Autonomous runs only yield control through the explicit Pause button.
+    if (agent.active) this.input.keyboard.resetKeys();
     if (agent.tick(delta)) { this.renderState(); return; }
     if (typing && !this.session.modal) { this.renderState(); return; }
     if (this.session.modal) {

@@ -1,9 +1,11 @@
-"""Game decisions: Explorer, Survival, and Navigator report in sequence.
+"""Game decisions: Explorer, Survival, and Navigator analyze concurrently.
 The Supervisor combines all three reports into one frontend intent.
 """
 
 from __future__ import annotations
 
+import asyncio
+import time
 import json
 from typing import AsyncGenerator
 
@@ -15,6 +17,8 @@ VALID_INTENTS = ["WATCH_LIGHTS", "ENTER_LIGHTS", "GO_MEMORY", "ANSWER_MEMORY", "
 
 
 class GameState(BaseModel):
+    visibleTiles: list[dict] = []
+    recentOutcomes: list[str] = []
     firstGateOpen: bool = True
     memorySolved: bool = True
     pathSolved: bool = True
@@ -80,7 +84,7 @@ async def _ask(system: str, user: str) -> str:
     r = await client.chat.completions.create(
         model=K2_MODEL,
         messages=[
-            {"role": "system", "content": system},
+            {"role": "system", "content": system + "\nBe concise: return at most two short sentences, or compact decision JSON when requested. Do not restate the full game state."},
             {"role": "user", "content": user},
         ],
     )
@@ -99,6 +103,8 @@ def _state_summary(state: GameState) -> str:
         f"Player position: {state.playerTile}",
         f"Monster position: {state.monsterTile}",
     ]
+    lines.append("Recent action outcomes (adjust your next decision): " + json.dumps(state.recentOutcomes))
+    lines.append("Visible tiles (only these cells are observed; other locations are unknown): " + json.dumps(state.visibleTiles))
     if state.question:
         lines.append(f"Question: {state.question.get('prompt', 'Not supplied')}")
         lines.append(f"Puzzle rule: {state.question.get('rule', 'unknown')}")
@@ -191,11 +197,17 @@ async def decide(state: GameState) -> AsyncGenerator[str, None]:
         summary += "\nThe document is open. Return ANSWER with answerId A, B, or C."
     yield sse_event("agent_thinking", agent="Supervisor", message="Consulting Explorer, Survival, and Navigator.")
     reports = []
+    started = time.monotonic()
+    tasks = []
+    async def consult(name, label):
+        output = await _run_tool(name, summary + "\nAnalyze independently from the supplied observations; the Supervisor will combine the reports.")
+        return label, output
     try:
         for name, (label, message) in _AGENT_LABEL.items():
             yield sse_event("agent_thinking", agent=label, message=message)
-            context = summary + ("\n\nPrevious specialist reports:\n" + "\n".join(reports) if reports else "")
-            output = await _run_tool(name, context)
+            tasks.append(asyncio.create_task(consult(name, label)))
+        for completed in asyncio.as_completed(tasks):
+            label, output = await completed
             reports.append(f"{label}: {output}")
             yield sse_event("agent_result", agent=label, content=output)
         yield sse_event("agent_thinking", agent="Supervisor", message="Combining all three reports into a final decision.")
@@ -203,8 +215,13 @@ async def decide(state: GameState) -> AsyncGenerator[str, None]:
         decision = _parse_decision(content, state)
         if not isinstance(decision, dict) or decision.get("intent") not in VALID_INTENTS:
             decision = _rule_based_intent(state)
-        yield sse_event("decision", intent=decision["intent"], answerId=decision.get("answerId"), reasoning=decision.get("reasoning", ""), sequence=decision.get("sequence"), memoryIndex=decision.get("memoryIndex"), path=decision.get("path"))
+        yield sse_event("decision", intent=decision["intent"], answerId=decision.get("answerId"), reasoning=decision.get("reasoning", ""), sequence=decision.get("sequence"), memoryIndex=decision.get("memoryIndex"), path=decision.get("path"), elapsedSeconds=round(time.monotonic() - started, 2))
     except Exception:
         import logging
         logging.getLogger(__name__).exception("Multi-agent decision failed")
         yield sse_event("error", message="A model call failed. Check the backend logs and retry.")
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)

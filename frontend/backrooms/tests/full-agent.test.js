@@ -33,3 +33,23 @@ for (let seed = 1; seed <= 3; seed++) test(`AI completes every opening room from
   assert(seen.some(x => x.observedSymbols.length === 5));
   c.pause();
 });
+
+test('startup observes lights before requesting a model decision', async () => {
+  const s = new GameSession({rng:()=>0.4});
+  let finish;
+  const c = new AgentController(s,()=>{},'http://test',()=>new Promise(resolve=>{finish=resolve;}));
+  const start = {...s.player};
+  c.start();
+  assert.equal(c.busy, false);
+  for(let i=0;i<1000;i++){s.advanceTime(16);c.tick(16);}
+  assert(c.busy);
+  assert.notDeepEqual(s.player,start);
+  assert.equal(s.lightPhase,'input');
+  assert.equal(c.evidence.lights.length,5);
+  const observed = [...c.evidence.lights];
+  finish(new Response('data: {"type":"decision","intent":"WATCH_LIGHTS"}\n\n',{headers:{'content-type':'text/event-stream'}}));
+  await new Promise(r=>setImmediate(r));
+  assert.deepEqual(c.evidence.lights,observed);
+  assert.equal(s.lightPhase,'input');
+  c.pause();
+});
