@@ -1,6 +1,9 @@
 export const MAP = [
   '#########################',
-  '#P......................#',
+  '#P....1...2...3...4.....#',
+  '#.......................#',
+  '#..........C............#',
+  '###########A#############',
   '#.......................#',
   '#.....K.................#',
   '#.......................#',
@@ -32,10 +35,21 @@ export const SEARCH_TIME = 3000;
 export const WAKE_TIME = 1200;
 export const MONSTER_STATE = { CHASE: 'CHASE', PATROL: 'PATROL', SEARCH: 'SEARCH' };
 export const PATROL_POINTS = [
-  { x: 3, y: 15 }, { x: 11, y: 16 }, { x: 20, y: 15 },
-  { x: 15, y: 18 }, { x: 7, y: 17 },
+  { x: 3, y: 18 }, { x: 11, y: 19 }, { x: 20, y: 18 },
+  { x: 15, y: 21 }, { x: 7, y: 20 },
 ];
 export const DOOR_CODE = '042';
+export const LIGHTS = { 1: 'RED', 2: 'BLUE', 3: 'GREEN', 4: 'YELLOW' };
+export const LIGHT_COLORS = { 1: 0xe87f72, 2: 0x76a6ee, 3: 0x8dce8a, 4: 0xe8cc70 };
+export const correctSequence = Object.freeze([2, 4, 1, 3]);
+export const LIGHT_LEAD_IN = 400;
+export const LIGHT_ON_TIME = 600;
+export const LIGHT_STEP_TIME = 900;
+
+export function checkLightCode(playerInput) {
+  return Array.isArray(playerInput) && playerInput.length === correctSequence.length
+    && correctSequence.every((expected, index) => playerInput[index] === expected);
+}
 
 // 固定題目先驗證遊戲流程。之後可用 K2 回傳的同一資料格式替換。
 // 密碼與答案目前都在前端，適合原型；競賽計分版應由後端判定。
@@ -93,6 +107,14 @@ export class GameSession {
   constructor() {
     if (MAP.some((row) => row.length !== MAP[0].length)) throw new Error('Unequal map rows');
     this.player = locate('P');
+    this.lightConsole = locate('C');
+    this.firstGateOpen = false;
+    this.lightInput = [];
+    this.lightPhase = 'idle';
+    this.lightElapsed = 0;
+    this.lightNotice = '按下播放，記住四盞燈的順序。';
+    this.pressedLight = null;
+    this.lightFlashRemaining = 0;
     this.key = locate('K');
     this.lock = locate('L');
     this.document = locate('D');
@@ -116,7 +138,7 @@ export class GameSession {
     this.documentArmed = true;
     this.won = false;
     this.respawns = 0;
-    this.message = '找到鑰匙。留意地板上的金色標記。';
+    this.message = '第一道門需要燈光密碼。前往 C 控制台，靠近後按 F 播放。';
   }
 
   cell(x, y) { return MAP[y]?.[x] ?? '#'; }
@@ -124,7 +146,79 @@ export class GameSession {
   canEnter(x, y, monster = false) {
     const cell = this.cell(x, y);
     return cell !== '#' && !(cell === 'S' && monster)
+      && !(cell === 'A' && !this.firstGateOpen)
       && !(cell === 'L' && !this.lockOpen) && !(cell === 'G' && !this.gateOpen);
+  }
+
+  get activeLight() {
+    if (this.lightPhase === 'playback') {
+      const elapsed = this.lightElapsed - LIGHT_LEAD_IN;
+      const index = Math.floor(elapsed / LIGHT_STEP_TIME);
+      return elapsed >= 0 && elapsed % LIGHT_STEP_TIME < LIGHT_ON_TIME ? correctSequence[index] ?? null : null;
+    }
+    return this.lightFlashRemaining > 0 ? this.pressedLight : null;
+  }
+
+  playLightSequence(denied = false) {
+    if (this.firstGateOpen || this.modal !== 'lights') return false;
+    this.lightInput = [];
+    this.lightPhase = 'playback';
+    this.lightElapsed = 0;
+    this.pressedLight = null;
+    this.lightFlashRemaining = 0;
+    this.lightNotice = denied ? 'ACCESS DENIED · 輸入錯誤，重新播放。' : '觀察閃燈順序，播放時不能輸入。';
+    return true;
+  }
+
+  pressLight(id) {
+    if (this.modal || this.firstGateOpen || this.lightPhase !== 'input' || !Object.hasOwn(LIGHTS, id)) return false;
+    const button = locate(String(id));
+    if (Math.hypot(this.player.x - button.x, this.player.y - button.y) >= TILE) return false;
+    this.pressedLight = Number(id);
+    this.lightFlashRemaining = 300;
+    this.lightInput.push(Number(id));
+    this.message = `已按下 ${id} ${LIGHTS[id]} · ${this.lightInput.length}/4。依記憶輸入四盞燈的順序。`;
+    if (this.lightInput.length === correctSequence.length) {
+      if (checkLightCode(this.lightInput)) {
+        this.firstGateOpen = true;
+        this.lightPhase = 'solved';
+        this.message = 'ACCESS GRANTED · 第一道門已開啟。穿過 A 門，繼續尋找鑰匙。';
+      } else {
+        this.modal = 'lights';
+        this.playLightSequence(true);
+        this.message = 'ACCESS DENIED · 第一道門仍關閉，請重新記憶燈光順序。';
+      }
+    }
+    return true;
+  }
+
+  interact() {
+    if (this.modal || this.won) return false;
+    if (Math.hypot(this.player.x - this.lightConsole.x, this.player.y - this.lightConsole.y) < TILE * 1.15) {
+      if (this.firstGateOpen) { this.message = '燈光密碼已解除，A 門已開啟。'; return false; }
+      this.modal = 'lights';
+      this.playLightSequence();
+      return true;
+    }
+    for (const id of Object.keys(LIGHTS)) {
+      const button = locate(id);
+      if (Math.hypot(this.player.x - button.x, this.player.y - button.y) < TILE) {
+        if (this.lightPhase === 'idle') this.message = '先到 C 控制台按 F，觀看完整的燈光順序。';
+        return this.pressLight(Number(id));
+      }
+    }
+    return false;
+  }
+
+  updateLights(ms) {
+    this.lightFlashRemaining = Math.max(0, this.lightFlashRemaining - ms);
+    if (this.lightPhase !== 'playback' || this.modal !== 'lights') return;
+    this.lightElapsed += ms;
+    if (this.lightElapsed >= LIGHT_LEAD_IN + correctSequence.length * LIGHT_STEP_TIME) {
+      this.lightPhase = 'input';
+      this.lightNotice = '播放完畢。返回房間，依序靠近四個燈光按鈕並按 F。';
+      this.message = '記住順序了嗎？靠近燈光按鈕按 F。忘記時可以回 C 控制台重播。';
+    }
   }
 
   occupied(point, radius = PLAYER_RADIUS) {
@@ -183,7 +277,14 @@ export class GameSession {
     return true;
   }
 
-  dismiss() { this.modal = null; }
+  dismiss() {
+    if (this.modal === 'lights' && this.lightPhase === 'playback') {
+      this.lightPhase = 'idle';
+      this.lightInput = [];
+      this.message = '播放已取消。回 C 控制台按 F，觀看完整順序後再輸入。';
+    }
+    this.modal = null;
+  }
 
   hasLineOfSight(from, to) {
     const distance = Math.hypot(to.x - from.x, to.y - from.y);
@@ -287,8 +388,9 @@ export class GameSession {
   }
 
   update(delta, input = {}) {
-    if (this.modal || this.won) return;
     const ms = Math.max(0, Math.min(delta, 100));
+    this.updateLights(ms);
+    if (this.modal || this.won) return;
     const x = input.x || 0, y = input.y || 0;
     const length = Math.hypot(x, y) || 1;
     const step = (input.sprint ? RUN_SPEED : WALK_SPEED) * ms / 1000;
