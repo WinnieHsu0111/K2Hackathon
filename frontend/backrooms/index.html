@@ -7,38 +7,46 @@
   </head>
   <body>
     <main>
-      <header><span>BACKROOMS</span><span>3 MINUTES TO ESCAPE</span></header>
-      <div class="k2-start-bar"><button id="start-k2-run" type="button">▶ Start K2</button><span id="run-status" role="status">Ready — press Start K2</span></div>
-      <section id="start-screen"><h1>BACKROOMS ESCAPE</h1><p>180 seconds. Fresh puzzles every run. Solve the lights, remember the symbols, test the paths, and find the exit.</p><button id="start-game" type="button">START · 3 MINUTES</button></section>
-      <div class="telemetry"><strong id="timer">180.0s</strong><span id="inventory">KEY —</span><span id="threat">No threats detected</span><button id="sound-toggle" type="button" aria-pressed="false">Jaws music: Off</button></div>
-      <p id="scan-status" role="status">Ready</p>
-      <p id="observation-status" role="status">OBSERVATION — waiting for the first K2 request</p>
-      <p id="movement-status" role="status">Route appears when K2 chooses a destination.</p>
-      <div id="game" tabindex="0" aria-label="Backrooms game. WASD or arrow keys to move, Shift to run, F to interact with nearby light buttons or the console, R to restart."></div>
-      <p id="status" role="status">The first gate requires a light sequence. Approach console C and press F to play it.</p>
-      <p class="controls">WASD / Arrow keys: Move · SHIFT: Run · F: Interact · R: Restart <span>Approach the locked door or touch the document to interact</span></p>
-      <section class="agent-panel" aria-label="K2 player controls">
-        <h2>K2 PLAYER</h2>
-        <p class="note">Press Start K2 to begin. K2 plays every room; all thinking, movement, and playback count toward 180 seconds. Press Pause to take manual control.</p>
-        <label for="backend-url">Backend URL</label>
-        <input id="backend-url" type="url" value="http://127.0.0.1:8000" />
-        <div class="agent-controls">
-          <button id="ai-step" type="button">K2 Step</button>
-          <button id="ai-auto" type="button">▶ Let K2 Play</button>
-          <button id="ai-pause" type="button">Pause</button>
-          <button id="ai-reset" type="button">Restart</button>
+      <header>
+        <span class="brand">BACKROOMS <small>AN AUTONOMOUS ESCAPE</small></span>
+        <div class="who-buttons">
+          <button id="play-k2" type="button" class="who-btn who-k2">▶ Run K2 Horizon</button>
+          <button id="play-ollama" type="button" class="who-btn who-ollama">▶ Run Ollama (small)</button>
+          <button id="ai-pause" type="button" class="who-mini-btn">Pause</button>
+          <button id="ai-reset" type="button" class="who-mini-btn">Restart</button>
         </div>
-        <p id="agent-status" role="status"></p>
-        <ol id="agent-log" aria-label="K2 decision log"></ol>
+        <div class="top-clock"><small>TIME LEFT</small><span id="timer">180.0s</span></div>
+      </header>
+      <div class="k2-start-bar" hidden><button id="start-k2-run" type="button">▶ Start K2</button><span id="run-status" role="status">Ready</span></div>
+      <section id="start-screen"><h1>BACKROOMS ESCAPE</h1><p>180 seconds. Fresh puzzles every run.</p><button id="start-game" type="button">START · 3 MINUTES</button></section>
+      <div class="telemetry" hidden><span id="inventory">KEY —</span><span id="threat">No threats detected</span><button id="sound-toggle" type="button" aria-pressed="false">Jaws music: Off</button></div>
+      <p id="scan-status" role="status" hidden>Ready</p>
+      <p id="observation-status" role="status" hidden>OBSERVATION</p>
+      <p id="movement-status" role="status" hidden>Route</p>
+      <div id="stage-wrap">
+        <div id="scene3d"></div>
+        <div id="interaction-prompt" aria-live="polite"></div>
+        <div id="equipment-status">FLASHLIGHT — / SCROLL — / KEY —</div>
+        <div class="scene-shade" aria-hidden="true"></div>
+        <div class="scene-top"><span id="scene-location">LEVEL 0</span><span id="scene-activity">AWAITING OPERATOR</span></div>
+        <div class="scene-bottom"><span id="scene-coordinates"></span><p id="scene-message"></p><span class="scene-format">LIVE 3D / PLAYER POV</span></div>
+        <div id="game" tabindex="0" aria-label="Backrooms game simulation."></div>
+      </div>
+      <p id="status" role="status" hidden>The first gate requires a light sequence.</p>
+      <p class="controls" hidden>WASD / Arrow keys: Move · SHIFT: Run · F: Interact · R: Restart</p>
+      <aside class="question-rail" aria-label="Mission and puzzles">
+      <section class="mission-panel" aria-label="Current mission">
+        <div class="section-heading"><span id="mission-number">STAGE 01 / 07</span><span>180s ESCAPE</span></div>
+        <h1 id="mission-title">Light sequence</h1>
+        <p id="mission-hint"></p>
+        <p id="mission-inventory"></p>
+        <ol id="stage-progress" aria-label="Level progression"></ol>
       </section>
-    </main>
-    <dialog id="interaction" aria-labelledby="dialog-title">
-      <p id="dialog-timer" class="clock">TIME LEFT 180.0s</p>
+      <section id="puzzle-recap" hidden aria-label="Last completed puzzle"><h2>LAST PUZZLE · SOLVED</h2><p id="puzzle-recap-text"></p></section>
+      <dialog id="interaction" aria-labelledby="dialog-title">
       <p class="eyebrow" id="dialog-label">ACCESS CONTROL</p>
       <h1 id="dialog-title">Enter access code</h1>
-      <p id="dialog-scan-status" role="status">Ready</p>
       <p id="dialog-agent-status" role="status"></p>
-      <ol id="dialog-agent-log" aria-label="Live K2 workflow"></ol>
       <section id="light-panel" hidden>
         <p>Watch five flashes, then enter the sequence here. Colors may repeat. A wrong sequence replays the lights while time keeps running.</p>
         <div class="light-preview" aria-label="Light sequence preview">
@@ -54,7 +62,7 @@
       </section>
       <section id="memory-panel" hidden><p id="memory-notice"></p><p id="memory-preview"></p><div id="memory-answers" class="answers"></div></section>
       <section id="lock-panel">
-        <p>Use the four-digit code on the key tag to unlock this door.</p>
+        <p>Your key opens the archive door. Enter its four-digit tag code. The final exit opens after the scroll puzzle.</p>
         <form id="lock-form" novalidate>
           <label for="door-code">Four-digit code</label>
           <input id="door-code" name="code" type="text" inputmode="numeric" pattern="[0-9]{4}" minlength="4" maxlength="4" autocomplete="off" required />
@@ -68,13 +76,38 @@
         <div id="answers" class="answers"></div>
         <p class="note">Warning: a wrong answer still opens the gate, but may release an anomaly.</p>
       </section>
-      <div class="agent-controls">
+      <div class="agent-controls" hidden>
         <button id="dialog-ai-step" type="button">K2 Step</button>
         <button id="dialog-ai-pause" type="button">Pause K2</button>
       </div>
-      <button id="restart-dialog" class="secondary" type="button">Restart with new puzzles</button>
+      <button id="restart-dialog" hidden class="secondary" type="button">Restart with new puzzles</button>
       <button id="close-dialog" class="secondary" type="button">Close · ESC</button>
     </dialog>
+      </aside>
+      <aside class="rail" aria-label="Map and agent activity">
+      <input id="backend-url" type="url" value="http://127.0.0.1:8000" hidden />
+      <section class="map-panel" aria-label="Tactical map">
+        <h2>MAP <span>01 → 07</span></h2>
+        <div class="map-box"><canvas id="minimap-canvas"></canvas></div>
+      </section>
+
+      <section class="hub-panel" aria-label="Live agent calls">
+        <div class="section-heading"><h2>AGENT CONTROL ROOM</h2><span>● LIVE CALL EVENTS</span></div>
+        <div id="hub"></div>
+        <p id="hub-caption">Standby · lights turn on only when an agent is called</p>
+        <p id="agent-status" role="status"></p>
+        <div id="agent-bubbles" class="agent-bubbles" aria-live="polite" aria-label="Agent dialogue"></div>
+        <h2 class="log-title">DECISIONS &amp; REPORTS</h2>
+        <ol id="agent-log" aria-label="K2 decision log"></ol>
+      </section>
+      <section class="memory-panel" aria-label="Run memory">
+        <div class="section-heading"><h2>FIELD MEMORY</h2><span>THIS RUN</span></div>
+        <p id="memory-summary">No attempts yet.</p>
+        <ol id="memory-feed"></ol>
+        <p class="note">Experience is sent with the next decision. New runs reset puzzle memory; model weights are unchanged.</p>
+      </section>
+      </aside>
+    </main>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

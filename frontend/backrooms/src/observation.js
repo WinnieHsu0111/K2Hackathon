@@ -33,7 +33,7 @@ export function getObservation(session, recentEvents = []) {
   const result = {
     player: { ...position, inSafeZone: session.playerInSafeZone },
     surroundings: tiles,
-    inventory: { hasKey: session.hasKey },
+    inventory: { hasKey: session.hasKey, hasFlashlight: session.hasFlashlight, hasDocument: session.hasDocument },
     monster: {
       visible: monsterVisible,
       heard: session.monsterActive && monsterDistance <= 7,

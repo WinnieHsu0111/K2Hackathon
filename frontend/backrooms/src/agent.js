@@ -1,17 +1,20 @@
 import { TILE, WALK_SPEED, RUN_SPEED, center, tileAt, findPath } from './level.js';
 import { getObservation } from './observation.js';
 
-export const INTENTS = Object.freeze(['WATCH_LIGHTS', 'ENTER_LIGHTS', 'GO_MEMORY', 'ANSWER_MEMORY', 'TRY_PATH', 'GO_KEY', 'GO_LOCK', 'GO_DOCUMENT', 'ANSWER', 'GO_SAFE', 'GO_EXIT']);
+export const INTENTS = Object.freeze(['PICK_FLASHLIGHT', 'WATCH_LIGHTS', 'ENTER_LIGHTS', 'GO_MEMORY', 'ANSWER_MEMORY', 'TRY_PATH', 'GO_KEY', 'GO_LOCK', 'GO_DOCUMENT', 'ANSWER', 'GO_SAFE', 'GO_EXIT']);
 
-export function buildAgentState(session, evidence = {}) {
+export function buildAgentState(session, evidence = {}, trajectory = []) {
   const observation = getObservation(session);
   return {
+    hasFlashlight: session.hasFlashlight, hasDocument: session.hasDocument,
     firstGateOpen: session.firstGateOpen, memorySolved: session.memorySolved, pathSolved: session.pathSolved,
     lightPhase: session.lightPhase, memoryPhase: session.memoryPhase,
     observedLights: evidence.lights || [], observedSymbols: evidence.symbols || [],
     memoryOptions: session.modal === 'memory' && session.memoryPhase === 'input' ? session.memoryOptions : [],
     triedPaths: evidence.triedPaths || [],
     recentOutcomes: evidence.outcomes || [],
+    // Full decision history so far — K2 reasons over the entire trajectory.
+    trajectory: trajectory || [],
     visibleTiles: observation.surroundings,
     atDocument: session.modal === 'document',
     hasKey: session.hasKey, lockOpen: session.lockOpen, gateOpen: session.gateOpen,
@@ -28,7 +31,7 @@ export function buildAgentState(session, evidence = {}) {
 export function validateDecision(value) {
   if (!value || !INTENTS.includes(value.intent)) throw new Error('The backend returned an unsupported command.');
   if (value.intent === 'ANSWER' && !['A', 'B', 'C'].includes(value.answerId)) throw new Error('The answer returned by the backend must be A, B, or C.');
-  if (value.intent === 'ENTER_LIGHTS' && (!Array.isArray(value.sequence) || value.sequence.length !== 5 || value.sequence.some(x => ![1,2,3,4].includes(x)))) throw new Error('Invalid light sequence from K2.');
+  if (value.intent === 'ENTER_LIGHTS' && (!Array.isArray(value.sequence) || value.sequence.length !== 3 || value.sequence.some(x => ![1,2,3,4].includes(x)))) throw new Error('Invalid light sequence from K2.');
   if (value.intent === 'ANSWER_MEMORY' && ![0,1,2].includes(value.memoryIndex)) throw new Error('Invalid memory choice from K2.');
   if (value.intent === 'TRY_PATH' && !['LEFT','CENTER','RIGHT'].includes(value.path)) throw new Error('Invalid path from K2.');
   return { sequence: value.sequence, memoryIndex: value.memoryIndex, path: value.path, intent: value.intent, answerId: value.answerId ?? null,
@@ -84,8 +87,13 @@ export async function requestDecision(baseUrl, state, signal, fetcher = fetch, o
 
 export function planIntent(session, decision) {
   const { intent, answerId } = decision;
-  const early = ['WATCH_LIGHTS', 'ENTER_LIGHTS', 'GO_MEMORY', 'ANSWER_MEMORY', 'TRY_PATH'];
+  const early = ['PICK_FLASHLIGHT', 'WATCH_LIGHTS', 'ENTER_LIGHTS', 'GO_MEMORY', 'ANSWER_MEMORY', 'TRY_PATH'];
   if (!session.aiReady && !early.includes(intent)) throw new Error('K2 must complete the opening puzzles first.');
+  if (intent === 'PICK_FLASHLIGHT') {
+    if (session.hasFlashlight) return [];
+    const target = tileAt(session.flashlight);
+    return findPath(tileAt(session.player), target, (x,y) => session.canEnter(x,y)).map(({x,y}) => center(x,y));
+  }
   if (intent === 'ENTER_LIGHTS') {
     if (session.modal !== 'lights' || session.lightPhase !== 'input') throw new Error('Lights are not ready for input.');
     for (const light of decision.sequence) session.pressLight(light);
@@ -150,7 +158,11 @@ export class AgentController {
     this.session = session; this.notify = notify; this.baseUrl = baseUrl; this.fetcher = fetcher;
     this.running = false; this.busy = false; this.route = []; this.turn = 0;
     this.evidence = { lights: [], symbols: [], triedPaths: [], outcomes: [] }; this.lastLight = null;
-    this.generation = 0; this.cooldown = 0; this.intent = null;
+    // Full decision trajectory (never truncated) — this is what lets K2 reason
+    // over the ENTIRE run so far, using its long context. The longer K2 plays,
+    // the more history it carries. This is the core "why K2" mechanism.
+    this.trajectory = [];
+    this.generation = 0; this.requestId = 0; this.cooldown = 0; this.intent = null;
   }
   get active() { return this.running || this.busy || this.route.length > 0; }
   pause(message = 'K2 paused. Manual control is available.') {
@@ -158,18 +170,28 @@ export class AgentController {
     this.busy = false; this.running = false; this.route = []; this.intent = null;
     this.notify({ status: message });
   }
+  recordOutcome(message) {
+    this.evidence.outcomes.push(message);
+    this.evidence.outcomes = this.evidence.outcomes.slice(-12);
+    this.trajectory.push(`Observed outcome: ${message}`);
+    this.notify({ status: message });
+  }
   async step() {
     if (this.busy || this.route.length || this.session.gameOver) return;
     if (!this.session.started) this.session.start();
     const generation = this.generation;
+    const requestId = ++this.requestId;
+    const stateVersion = `${this.turn}:${this.session.player.x.toFixed(2)},${this.session.player.y.toFixed(2)}:${this.session.modal || 'world'}`;
     this.thinkingSince = performance.now();
     this.agentStages = {};
     this.busy = true; this.abort = new AbortController();
     const abort = this.abort;
-    const timer = setTimeout(() => abort.abort(), 120000);
-    const state = buildAgentState(this.session, this.evidence);
+    const timer = setTimeout(() => abort.abort(), 5000);
+    const state = buildAgentState(this.session, this.evidence, this.trajectory);
+    state.player = this.player || 'k2';  // which model drives this run
     this.lastObservation = state.visibleTiles;
-    this.notify({ status: 'K2 is deciding the next move…' });
+    const who = state.player === 'ollama' ? 'Ollama (small model)' : 'K2 Horizon';
+    this.notify({ status: `${who} is deciding the next move…` });
     try {
       const decision = await requestDecision(this.baseUrl, state, this.abort.signal, this.fetcher, (agentEvent) => {
         if (generation === this.generation && !this.session.gameOver) {
@@ -177,17 +199,35 @@ export class AgentController {
           this.notify({ agentEvent });
         }
       });
-      if (generation !== this.generation || this.session.gameOver) return;
+      const currentVersion = `${this.turn}:${this.session.player.x.toFixed(2)},${this.session.player.y.toFixed(2)}:${this.session.modal || 'world'}`;
+      if (generation !== this.generation || requestId !== this.requestId || this.session.gameOver || currentVersion !== stateVersion) {
+        this.notify({ status: 'Discarded stale K2 action; the game state changed while it was thinking.' });
+        return;
+      }
+      if (decision.intent === 'TRY_PATH' && this.evidence.triedPaths.includes(decision.path)) {
+        this.recordOutcome(`Engine guard: ${decision.path} already failed. Repeated move blocked; asking the model to choose again.`);
+        return;
+      }
       this.intent = decision.intent;
       this.selectedPath = decision.path;
       // Preserve observations collected while approaching during this request.
       this.route = planIntent(this.session, decision);
+      if (decision.intent === 'ENTER_LIGHTS') this.recordOutcome(this.session.firstGateOpen ? 'Light sequence accepted. Use the observed order, including repeated colors.' : 'Light sequence rejected. Watch the replay before answering again.');
+      if (decision.intent === 'ANSWER_MEMORY') this.recordOutcome(this.session.memorySolved ? 'Symbol order accepted. Remembered symbols matched the selected option.' : 'Symbol order rejected. The symbols are being shown again; compare their full order.');
+      if (decision.intent === 'ANSWER') this.recordOutcome(this.session.monsterActive ? 'Document answer was wrong. The monster woke up; seek shelter before the exit.' : 'Document answer accepted. The final exit gate is open.');
+      if (decision.intent === 'TRY_PATH' && this.evidence.triedPaths.length) this.recordOutcome(`Trying ${decision.path} after excluding failed corridors: ${this.evidence.triedPaths.join(', ')}.`);
       this.turn++;
+      // Append this decision to the full trajectory K2 sees on every later turn.
+      this.trajectory.push(`Turn ${this.turn}: at (${state.playerTile.x},${state.playerTile.y}) chose ${decision.intent}${decision.answerId ? ' ' + decision.answerId : ''} — ${(decision.reasoning || '').slice(0, 120)}`);
       this.notify({ status: `Executing ${decision.intent}`, entry: { turn: this.turn, state, ...decision } });
       this.cooldown = 0;
     } catch (error) {
-      if (generation === this.generation) this.pause(error.name === 'AbortError'
-        ? 'K2 request timed out. Paused.' : `${error.message} Make sure the backend is running.`);
+      if (generation === this.generation) {
+        this.busy = false;
+        this.cooldown = 700;
+        this.notify({ status: error.name === 'AbortError'
+          ? 'K2 is still thinking; gameplay continues.' : `K2 unavailable; gameplay continues. ${error.message}` });
+      }
     } finally {
       clearTimeout(timer);
       if (generation === this.generation) { this.busy = false; this.abort = null; }
@@ -196,8 +236,13 @@ export class AgentController {
   start() {
     if (this.active) return;
     this.running = true;
+    this.session.paused = false;
     if (!this.session.started) this.session.start();
-    if (!this.session.firstGateOpen && !this.session.modal && !this.session.gameOver) {
+    if (!this.session.hasFlashlight && !this.session.gameOver) {
+      this.intent = 'PICK_FLASHLIGHT';
+      this.route = planIntent(this.session, { intent: 'PICK_FLASHLIGHT' });
+      this.notify({ status: 'Collecting the flashlight at the entrance before exploring.' });
+    } else if (!this.session.firstGateOpen && !this.session.modal && !this.session.gameOver) {
       this.intent = 'WATCH_LIGHTS';
       this.route = planIntent(this.session, {intent:'WATCH_LIGHTS'});
       this.notify({status:'Approaching console C to collect observations before requesting K2.',
@@ -216,13 +261,45 @@ export class AgentController {
     this.previousLightPhase = s.lightPhase;
     if (s.memoryPhase === 'reveal') this.evidence.symbols = [...s.memorySequence];
     if (s.gameOver) { this.pause(s.won ? 'K2 has reached the exit.' : 'Run ended.'); return true; }
-    // The scene advances the global clock even during network latency; human input cancels the request.
+    if (!this.route.length && this.intent === 'PICK_FLASHLIGHT') {
+      if (!s.pickupFlashlight()) { this.pause('Could not reach the flashlight.'); return true; }
+      this.intent = 'WATCH_LIGHTS';
+      this.route = planIntent(s, { intent: 'WATCH_LIGHTS' });
+      this.notify({ status: 'Flashlight collected. Moving to the first puzzle.' });
+    }
+    // The scene advances the global clock during network latency unless explicitly paused.
     if (!this.route.length && this.intent === 'WATCH_LIGHTS' && !s.modal) {
       s.interact(); this.intent = null;
     }
     if (this.busy && !this.route.length) return true;
     if (s.modal === 'lights' || s.modal === 'memory') {
       if (s.lightPhase === 'playback' || s.memoryPhase === 'reveal') return true;
+      // The engine owns the observed three-light sequence. Submit it locally
+      // so the opening gate never depends on an LLM response or timeout.
+      if (s.modal === 'lights' && s.lightPhase === 'input' && this.evidence.lights.length === 3) {
+        for (const id of this.evidence.lights) s.pressLight(id);
+        this.recordOutcome(s.firstGateOpen ? 'Three-light sequence accepted by the game engine.' : 'Three-light sequence rejected; replaying the sequence.');
+        if (s.firstGateOpen && !s.memorySolved) {
+          this.abort?.abort(); this.busy = false; this.intent = 'GO_MEMORY';
+          this.route = planIntent(s, { intent: 'GO_MEMORY' });
+        }
+        return true;
+      }
+      if (s.modal === 'memory' && s.memoryPhase === 'input' && this.evidence.symbols.length === 5) {
+        const target = this.evidence.symbols.join('|');
+        const index = s.memoryOptions.findIndex(option => option.join('|') === target);
+        if (index >= 0) {
+          s.answerMemory(index);
+          this.recordOutcome(s.memorySolved ? 'Five-symbol memory sequence accepted by the game engine.' : 'Memory sequence rejected; replaying the reveal.');
+          if (s.memorySolved && !s.pathSolved) {
+            // Corridor choice is the first real planning task: ask Navigator
+            // (and Explorer when the map is unclear) instead of hard-coding a lane.
+            this.abort?.abort(); this.busy = false; this.intent = null;
+            this.cooldown = 0;
+          }
+          return true;
+        }
+      }
       if (this.route.length) s.dismiss();
       else if (this.running && !this.busy) { void this.step(); return true; }
       else return true;
@@ -244,10 +321,12 @@ export class AgentController {
         if (s.respawns !== respawns) {
           if (this.intent === 'TRY_PATH') {
             if (!this.evidence.triedPaths.includes(this.selectedPath)) this.evidence.triedPaths.push(this.selectedPath);
-            this.evidence.outcomes.push(`TRY_PATH ${this.selectedPath} failed: returned to corridor entrance. Choose a different path.`);
-            this.evidence.outcomes = this.evidence.outcomes.slice(-6);
+            this.recordOutcome(`TRY_PATH ${this.selectedPath} failed: returned to the entrance. Remember this corridor and choose a different one.`);
             this.route = []; this.intent = null; this.cooldown = 0;
             this.notify({status: `False path: ${this.selectedPath}. K2 will choose another corridor.`});
+            // Re-plan immediately after the trap returns the player to the
+            // entrance; do not leave the character standing still.
+            if (this.running && !this.busy) void this.step();
           } else this.pause('The player has respawned. Restart K2.');
           return true;
         }
@@ -255,8 +334,16 @@ export class AgentController {
       }
       return true;
     }
-    if (['WATCH_LIGHTS', 'GO_MEMORY'].includes(this.intent)) {
-      s.interact(); this.intent = null;
+    if (['PICK_FLASHLIGHT', 'WATCH_LIGHTS', 'GO_MEMORY', 'GO_KEY', 'GO_DOCUMENT'].includes(this.intent)) {
+      s.interact();
+      if (this.intent === 'PICK_FLASHLIGHT' && s.hasFlashlight) {
+        this.intent = 'WATCH_LIGHTS';
+        this.route = planIntent(s, { intent: 'WATCH_LIGHTS' });
+        return true;
+      }
+      if (this.intent === 'GO_KEY' && s.hasKey) this.intent = null;
+      else if (this.intent === 'GO_DOCUMENT' && s.hasDocument) this.intent = null;
+      else if (['WATCH_LIGHTS', 'GO_MEMORY'].includes(this.intent)) this.intent = null;
       if (s.modal) return true;
     }
     if (this.running) {

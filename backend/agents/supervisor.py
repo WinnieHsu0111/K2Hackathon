@@ -5,14 +5,22 @@ from __future__ import annotations
 import textwrap
 from typing import AsyncGenerator
 
-from .base import K2_MODEL, get_client, sse_event, load_prompt
+from .base import K2_MODEL, get_client, sse_event
 from .explorer import call_explorer
 from .survival import call_survival
 from .navigator import call_navigator
 from game_state import LEVELS, get_memory_summary, record_attempt
 
 
-SUPERVISOR_PROMPT = load_prompt("supervisor")
+SUPERVISOR_PROMPT = """You are the game supervisor for a Backrooms escape scenario.
+Judge the Navigator's action against the room conditions.
+Reply with exactly two lines:
+1. One verdict: SUCCESS, DANGER, or CONTINUE.
+2. A brief reason.
+v g
+The exit condition is: {exit_condition}
+The danger condition is: {danger_condition}
+"""
 
 
 

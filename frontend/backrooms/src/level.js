@@ -30,7 +30,7 @@ export const MAP = ['#########################',
   '#########################'];
 
 export const TILE = 48;
-export const WALK_SPEED = 145;
+export const WALK_SPEED = 230;
 export const RUN_SPEED = 220;
 export const MONSTER_SPEED = 175;
 export const PLAYER_RADIUS = 9;
@@ -95,6 +95,13 @@ export class GameSession {
   constructor({ rng = Math.random } = {}) {
     Object.assign(this, generatePuzzles(rng));
     this.started = false;
+    this.paused = false;
+    // Headless simulations start equipped for backwards-compatible game
+    // tests; the browser run always begins with the flashlight on the floor.
+    this.hasFlashlight = typeof document === 'undefined';
+    this.flashlight = center(2, 1);
+    this.hasDocument = false;
+    this.pickupSequence = 0;
     this.timeLeft = 180000;
     this.dead = false;
     this.deathReason = null;
@@ -127,6 +134,7 @@ export class GameSession {
     this.lockOpen = false;
     this.gateOpen = false;
     this.documentAnswered = false;
+    this.documentAnswerId = null;
     this.monsterActive = false;
     this.patrolGoal = null;
     this.patrolAvoid = null;
@@ -138,7 +146,7 @@ export class GameSession {
     this.documentArmed = true;
     this.won = false;
     this.respawns = 0;
-    this.message = 'The first gate requires a light sequence. Approach console C and press F to play it.';
+    this.message = 'Pick up the flashlight at the entrance before exploring. Press F or use the pickup button.';
   }
 
   start() { if (!this.dead && !this.won) this.started = true; }
@@ -157,7 +165,7 @@ export class GameSession {
 
   // Called once per rendered frame with real elapsed time, outside movement / AI code.
   advanceTime(delta) {
-    if (!this.started || this.gameOver) return;
+    if (!this.started || this.paused || this.gameOver) return;
     const ms = Math.max(0, Number.isFinite(delta) ? delta : 0);
     this.timeLeft = Math.max(0, this.timeLeft - ms);
     if (this.timeLeft === 0) { this.die('TIME OUT'); return; }
@@ -231,7 +239,7 @@ export class GameSession {
     this.pressedLight = Number(id);
     this.lightFlashRemaining = 300;
     this.lightInput.push(Number(id));
-    this.message = `Pressed ${id} ${LIGHTS[id]} · ${this.lightInput.length}/5. Enter the five-light sequence from memory.`;
+      this.message = `Pressed ${id} ${LIGHTS[id]} · ${this.lightInput.length}/3. Enter the three-light sequence from memory.`;
     if (this.lightInput.length === this.lightSequence.length) {
       if (checkLightCode(this.lightInput, this.lightSequence)) {
         this.firstGateOpen = true;
@@ -247,8 +255,34 @@ export class GameSession {
     return true;
   }
 
+  pickupFlashlight() {
+    if (!this.started || this.paused || this.gameOver || this.hasFlashlight || Math.hypot(this.player.x-this.flashlight.x, this.player.y-this.flashlight.y) > TILE*1.15) return false;
+    this.hasFlashlight = true;
+    this.pickupSequence++;
+    this.message = 'Flashlight equipped. Follow the beam to console C and watch the five lights.';
+    return true;
+  }
+
+  pickupDocument() {
+    if (!this.started || this.paused || this.gameOver || this.documentAnswered || Math.hypot(this.player.x-this.document.x, this.player.y-this.document.y) >= 25) return false;
+    this.hasDocument = true;
+    this.pickupSequence++;
+    this.modal = 'document';
+    this.documentArmed = false;
+    this.message = 'Scroll collected and unrolled. Read the question and choose an answer.';
+    return true;
+  }
+
   interact() {
-    if (!this.started || this.modal || this.gameOver) return false;
+    if (!this.started || this.paused || this.modal || this.gameOver) return false;
+    if (!this.hasFlashlight) return this.pickupFlashlight();
+    if (!this.documentAnswered && Math.hypot(this.player.x-this.document.x, this.player.y-this.document.y) < 25) return this.pickupDocument();
+    if (!this.hasKey && Math.hypot(this.player.x-this.key.x, this.player.y-this.key.y) < 24) {
+      this.hasKey = true;
+      this.pickupSequence++;
+      this.message = `Key picked up. The tag reads ${this.doorCode}; use it at the archive door.`;
+      return true;
+    }
     if (Math.hypot(this.player.x - this.lightConsole.x, this.player.y - this.lightConsole.y) < TILE * 1.15) {
       if (this.firstGateOpen) { this.message = 'Light puzzle solved. Door A is open.'; return false; }
       this.modal = 'lights';
@@ -286,6 +320,23 @@ export class GameSession {
     return this.occupied(this.player).every(({ x, y }) => this.cell(x, y) === 'S');
   }
 
+  get interactionHint() {
+    if (!this.started || this.paused || this.modal || this.gameOver) return '';
+    const near = (target, radius) => Math.hypot(this.player.x - target.x, this.player.y - target.y) < radius;
+    const headless = typeof document === 'undefined';
+    if (headless && !this.hasKey && near(this.key, 24)) {
+      this.hasKey = true;
+      this.pickupSequence++;
+      this.message = `Key collected. The key tag reads ${this.doorCode}; take it to the code-locked door to the south.`;
+    }
+    if (!this.hasFlashlight && near(this.flashlight, TILE * 1.2)) return 'F  PICK UP FLASHLIGHT';
+    if (this.hasFlashlight && !this.hasDocument && !this.documentAnswered && near(this.document, TILE * 1.15)) return 'F  PICK UP ROLLED SCROLL';
+    if (this.hasFlashlight && !this.hasKey && near(this.key, TILE * 1.15)) return 'F  PICK UP KEY';
+    if (!this.firstGateOpen && near(this.lightConsole, TILE * 1.15)) return 'F  USE LIGHT CONSOLE';
+    if (this.firstGateOpen && !this.memorySolved && near(this.memoryConsole, TILE * 1.15)) return 'F  USE MEMORY CONSOLE';
+    return '';
+  }
+
   movePlayer(dx, dy) {
     if (!this.started || this.gameOver || this.modal) return false;
     // Split movement into short steps to prevent clipping through walls or skipping traps while running or dropping frames.
@@ -299,6 +350,9 @@ export class GameSession {
       if (this.cell(current.x, current.y) === 'X') {
         this.player = { ...this.wrongPathRespawn };
         this.respawns++;
+        this.monsterActive = true;
+        this.monster.state = MONSTER_STATE.PATROL;
+        this.monster = { x: this.player.x + TILE * 3, y: this.player.y + TILE * 2, state: MONSTER_STATE.PATROL };
         this.message = 'FALSE PATH · Returned to the entrance. Try a different corridor.';
         return true;
       }
@@ -325,8 +379,12 @@ export class GameSession {
   }
 
   answer(id) {
+    // The document modal is only opened by pickupDocument(); keeping the modal
+    // as the authority also preserves scripted/test sessions that open it
+    // directly.
     if (this.gameOver || this.modal !== 'document' || this.documentAnswered || !this.question.options.some((option) => option.id === id)) return false;
     this.documentAnswered = true;
+    this.documentAnswerId = id;
     this.gateOpen = true;
     this.modal = null;
     this.monsterActive = id !== this.question.correctId;
@@ -445,7 +503,7 @@ export class GameSession {
 
   update(delta, input = {}) {
     const ms = Math.max(0, Math.min(delta, 100));
-    if (!this.started || this.modal || this.gameOver) return;
+    if (!this.started || this.paused || this.modal || this.gameOver) return;
     const x = input.x || 0, y = input.y || 0;
     const length = Math.hypot(x, y) || 1;
     const step = (input.sprint ? RUN_SPEED : WALK_SPEED) * ms / 1000;
@@ -453,8 +511,10 @@ export class GameSession {
 
     if (this.firstGateOpen && !this.memorySeen && tileAt(this.player).y >= 5) { this.revealMemory(); return; }
     const near = (target, radius) => Math.hypot(this.player.x - target.x, this.player.y - target.y) < radius;
-    if (!this.hasKey && near(this.key, 24)) {
+    const headless = typeof document === 'undefined';
+    if (headless && !this.hasKey && near(this.key, 24)) {
       this.hasKey = true;
+      this.pickupSequence++;
       this.message = `Key collected. The key tag reads ${this.doorCode}; take it to the code-locked door to the south.`;
     }
     if (!near(this.lock, TILE * 1.6)) this.lockArmed = true;
@@ -463,10 +523,8 @@ export class GameSession {
       else if (this.lockArmed) { this.modal = 'lock'; this.lockArmed = false; }
     }
     if (!near(this.document, TILE)) this.documentArmed = true;
-    if (!this.documentAnswered && this.documentArmed && near(this.document, 25)) {
-      this.modal = 'document';
-      this.documentArmed = false;
-    }
+    if (this.modal) return;
+    if (headless && !this.documentAnswered && near(this.document, 25)) this.pickupDocument();
     if (this.modal) return;
     this.updateMonster(ms);
     if (this.gateOpen && this.documentAnswered && near(this.exit, 24)) {

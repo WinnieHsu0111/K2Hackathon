@@ -5,6 +5,10 @@ import './style.css';
 import { getObservation } from './observation.js';
 import { SYMBOLS } from './puzzles.js';
 import { createAgentPanel } from './agent-panel.js';
+import { createComparePanel } from './compare-panel.js';
+import { createMinimap } from './minimap.js';
+import { createScene3D } from './scene3d.js';
+import { createMission } from './mission.js';
 
 const byId = (id) => document.getElementById(id);
 const updateText = (element, value) => { if (element.textContent !== value) element.textContent = value; };
@@ -59,7 +63,7 @@ class GameUI {
     const s = this.session;
     updateText(byId('status'), s.message);
     const time = `${(s.timeLeft / 1000).toFixed(1)}s`;
-    updateText(byId('timer'), time); updateText(byId('dialog-timer'), `TIME LEFT ${time}`);
+    updateText(byId('timer'), time);
     byId('timer').dataset.urgent = String(s.timeLeft <= 15000);
     byId('start-screen').hidden = true;
     updateText(byId('inventory'), !s.firstGateOpen ? `LIGHT CODE ${s.lightInput.length}/5`
@@ -76,15 +80,18 @@ class GameUI {
       for (const name of ['lock', 'light', 'document', 'memory']) byId(`${name}-panel`).hidden = s.modal !== (name === 'light' ? 'lights' : name);
       const titles = { lights: 'Remember five lights', lock: 'Enter the code', document: 'CALCULUS FILE', memory: 'Remember five symbols' };
       byId('dialog-title').textContent = titles[s.modal];
-      byId('dialog-label').textContent = 'THE CLOCK IS RUNNING';
+      byId('dialog-label').textContent = 'FIELD INTERACTION';
       byId('lock-error').textContent = ''; byId('door-code').value = '';
       this.keyboard.resetKeys(); this.keyboard.enabled = false;
-      this.dialog.showModal();
+      // Show inline (non-modal) so the map, minimap, and pipeline stay visible —
+      // the interaction panel never blacks out the screen.
+      this.dialog.show();
+      document.querySelector('.question-rail').scrollTop = 0;
       if (s.modal === 'lock') byId('door-code').focus(); else byId('close-dialog').focus();
     }
     if (s.modal === 'lights') {
       updateText(byId('light-playback-status'), s.lightNotice);
-      updateText(byId('light-current'), s.lightPhase === 'input' ? `INPUT ${s.lightInput.length}/5` : s.activeLight ? `${s.activeLight} · ${LIGHTS[s.activeLight]}` : '—');
+      updateText(byId('light-current'), s.lightPhase === 'input' ? `INPUT ${s.lightInput.length}/3` : s.activeLight ? `${s.activeLight} · ${LIGHTS[s.activeLight]}` : '—');
       for (const light of document.querySelectorAll('[data-light]')) light.classList.toggle('lit', Number(light.dataset.light) === s.activeLight);
       for (const button of byId('light-input').children) button.disabled = s.lightPhase !== 'input';
       byId('replay-lights').disabled = s.lightPhase === 'playback';
@@ -93,7 +100,7 @@ class GameUI {
     byId('memory-preview').textContent = revealing ? s.memorySequence.map((item) => SYMBOLS[item]).join('  ') : 'Symbols hidden';
     byId('memory-preview').setAttribute('aria-label', revealing ? s.memorySequence.join(', ') : 'Symbols hidden');
     byId('memory-answers').hidden = revealing;
-    byId('memory-notice').textContent = revealing ? `Memorize the order · ${(s.memoryRemaining/1000).toFixed(1)}s` : 'Choose the order you saw. A wrong answer replays the symbols.';
+    byId('memory-notice').textContent = revealing ? `MEMORY TEST · Memorize the complete five-symbol order · ${(s.memoryRemaining/1000).toFixed(1)}s` : 'Choose the option with the exact same five-symbol order. A wrong answer replays the reveal.';
     byId('close-dialog').textContent = 'Return to room · ESC';
   }
 }
@@ -122,11 +129,22 @@ class Backrooms extends Phaser.Scene {
     this.lightButtons = {};
     ui.bind(this.session, this.input.keyboard);
     this.agentPanel = createAgentPanel(this.session, () => this.scene.restart({ autoStart: true }), Boolean(data.autoStart));
+    createComparePanel(byId('backend-url').value || 'http://127.0.0.1:8000');
+    this.minimap = createMinimap();
+    this.mission = createMission();
+    try {
+      this.view3d = createScene3D(byId('scene3d'));
+      document.body.classList.add('has-3d');
+    } catch (error) {
+      console.error('3D renderer unavailable:', error);
+      document.body.classList.remove('has-3d');
+      byId('scene3d').textContent = '3D unavailable — showing the live 2D view.';
+    }
     ui.onRestart = () => this.scene.restart({ autoStart: true });
     ui.isAutonomous = () => this.agentPanel.controller.active;
     byId('backend-url').onfocus = () => { this.input.keyboard.resetKeys(); this.input.keyboard.enabled = false; };
     byId('backend-url').onblur = () => { this.input.keyboard.resetKeys(); this.input.keyboard.enabled = !this.session.modal; };
-    this.events.once('shutdown', () => { this.agentPanel.destroy(); ui.close(); });
+    this.events.once('shutdown', () => { this.agentPanel.destroy(); this.view3d?.destroy(); this.view3d = null; ui.close(); });
 
     MAP.forEach((row, y) => [...row].forEach((cell, x) => {
       const px = x * TILE + TILE / 2, py = y * TILE + TILE / 2;
@@ -202,7 +220,9 @@ class Backrooms extends Phaser.Scene {
       this.add.rectangle(-5, -4, 4, 4, 0xffbf83),
       this.add.rectangle(5, -4, 4, 4, 0xffbf83),
     ]).setDepth(3).setVisible(false);
-    this.cameras.main.setBounds(0, 0, MAP[0].length * TILE, MAP.length * TILE);
+    const mapW = MAP[0].length * TILE, mapH = MAP.length * TILE;
+    // Main camera: teammate's immersive flashlight view — follows the player.
+    this.cameras.main.setBounds(0, 0, mapW, mapH);
     this.cameras.main.startFollow(this.player, true);
 
     // Circular gradient field of view; wall occlusion is not implemented in this version.
@@ -235,11 +255,17 @@ class Backrooms extends Phaser.Scene {
       noise.context.putImageData(pixels, 0, 0); noise.refresh();
     }
     this.staticOverlay = this.add.image(480, 288, 'static-noise').setDisplaySize(960, 576).setScrollFactor(0).setDepth(19).setAlpha(0);
+
     this.renderState();
   }
 
   renderState() {
     const state = this.session;
+    this.minimap?.draw(state);
+    this.view3d?.draw(state, this.agentPanel.controller);
+    this.mission?.draw(state, this.agentPanel.controller);
+    updateText(byId('interaction-prompt'), state.interactionHint);
+    byId('interaction-prompt').hidden = !state.interactionHint;
     this.player.setPosition(state.player.x, state.player.y);
     const controller = this.agentPanel.controller;
     const route = controller.route;
@@ -273,22 +299,19 @@ class Backrooms extends Phaser.Scene {
     this.routeOverlay.clear();
     this.routeTarget.setVisible(route.length > 0 && !state.gameOver);
     if (route.length && !state.gameOver) {
-      this.routeOverlay.lineStyle(3, 0x7effe4, 0.8);
-      this.routeOverlay.beginPath();
-      this.routeOverlay.moveTo(state.player.x, state.player.y);
-      for (const point of route) this.routeOverlay.lineTo(point.x, point.y);
-      this.routeOverlay.strokePath();
-      this.routeOverlay.fillStyle(0x7effe4, 0.8);
-      for (const point of route) this.routeOverlay.fillCircle(point.x, point.y, 3);
+      // Show only where K2 decided to go — a faint destination ring — NOT a
+      // step-by-step path line, which wrongly reads as "K2 is being led".
       const target = route.at(-1);
+      this.routeOverlay.lineStyle(1.5, 0x7effe4, 0.5);
       this.routeOverlay.strokeCircle(target.x, target.y, 12);
-      this.routeOverlay.strokeCircle(state.player.x, state.player.y, 13);
       this.routeTarget.setPosition(target.x, target.y - 17);
     }
     this.darkness.setPosition(state.player.x, state.player.y);
     this.keyMarker.setVisible(!state.hasKey);
     this.paper.setAlpha(state.documentAnswered ? 0.35 : 1);
-    this.monster.setVisible(state.monsterActive).setPosition(state.monster.x, state.monster.y);
+    // Monster is always rendered so the minimap shows it; the flashlight camera's
+    // darkness still hides it in the immersive view until the player is close.
+    this.monster.setVisible(true).setPosition(state.monster.x, state.monster.y);
     for (const [door, open] of [[this.firstGate, state.firstGateOpen], [this.lockDoor, state.lockOpen], [this.questionGate, state.gateOpen]]) {
       door.block.setAlpha(open ? 0.15 : 1);
       door.label.setText(open ? 'OPEN' : door.title);
@@ -325,6 +348,7 @@ class Backrooms extends Phaser.Scene {
     this.session.advanceTime(now - this.lastClock);
     this.lastClock = now;
     const agent = this.agentPanel.controller;
+    if (this.session.paused) { this.renderState(); return; }
     if (this.session.dead) {
       if (agent.active) agent.pause('Run ended. Press Start K2 to retry.');
       this.deathShownAt ??= now;
@@ -356,8 +380,13 @@ class Backrooms extends Phaser.Scene {
   }
 }
 
+// Single-screen layout for everyone: flashlight game view + minimap + pipeline +
+// K2 status + comparison, all visible at once, dialog shown inline (never a
+// full-screen modal). No separate demo URL — this is the normal experience.
+document.body.classList.add('demo-mode');
+
 const game = new Phaser.Game({
-  type: Phaser.AUTO,
+  type: Phaser.CANVAS,
   parent: 'game',
   width: 960,
   height: 576,

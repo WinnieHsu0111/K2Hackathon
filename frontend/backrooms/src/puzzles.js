@@ -48,7 +48,7 @@ export function generatePuzzles(rng = Math.random) {
   const wrong2 = [...memorySequence]; [wrong2[3], wrong2[4]] = [wrong2[4], wrong2[3]];
   const memoryOptions = shuffle([memorySequence, wrong1, wrong2], rng);
   return { doorCode: String(randomInt(1000,9999,rng)),
-    lightSequence: Array.from({length:5}, () => randomInt(1,4,rng)),
+    lightSequence: Array.from({length:3}, () => randomInt(1,4,rng)),
     memorySequence, memoryOptions, memoryAnswer: memoryOptions.indexOf(memorySequence),
     correctPath: ['LEFT','CENTER','RIGHT'][randomInt(0,2,rng)], question: generateQuestion(rng) };
 }
