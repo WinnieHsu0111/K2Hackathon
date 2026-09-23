@@ -25,6 +25,7 @@
       <p id="movement-status" role="status" hidden>Route</p>
       <div id="stage-wrap">
         <div id="scene3d"></div>
+        <div id="stage-result" role="status" aria-live="assertive"></div>
         <div id="interaction-prompt" aria-live="polite"></div>
         <div id="equipment-status">FLASHLIGHT — / SCROLL — / KEY —</div>
         <div class="scene-shade" aria-hidden="true"></div>
@@ -36,52 +37,66 @@
       <p class="controls" hidden>WASD / Arrow keys: Move · SHIFT: Run · F: Interact · R: Restart</p>
       <aside class="question-rail" aria-label="Mission and puzzles">
       <section class="mission-panel" aria-label="Current mission">
-        <div class="section-heading"><span id="mission-number">STAGE 01 / 07</span><span>180s ESCAPE</span></div>
-        <h1 id="mission-title">Light sequence</h1>
-        <p id="mission-hint"></p>
-        <p id="mission-inventory"></p>
+        <div id="level-badge" class="level-badge">LEVEL 1 · SPECIALIZATION</div>
+        <h1 id="level-subtitle">Light Sequence</h1>
+        <p id="level-tagline" class="level-tagline">Supervisor alone → fails. Add Observer → succeeds.</p>
+        <div id="agent-chain" class="agent-chain" aria-label="Agents involved in this level"></div>
+        <div class="llm-trace">
+          <p class="llm-trace-label">THINKING</p>
+          <div id="llm-thinking" class="llm-thinking" aria-live="polite"></div>
+          <p class="llm-trace-label">ANSWER</p>
+          <div id="llm-answer" class="llm-answer" aria-live="polite"></div>
+        </div>
+        <div id="mission-agent-log" class="mission-agent-log" aria-live="polite"></div>
+        <h2 id="mission-title" hidden></h2>
+        <p id="mission-hint" hidden></p>
+        <p id="mission-inventory" hidden></p>
+        <span id="mission-number" hidden></span>
         <ol id="stage-progress" aria-label="Level progression"></ol>
       </section>
       <section id="puzzle-recap" hidden aria-label="Last completed puzzle"><h2>LAST PUZZLE · SOLVED</h2><p id="puzzle-recap-text"></p></section>
       <dialog id="interaction" aria-labelledby="dialog-title">
-      <p class="eyebrow" id="dialog-label">ACCESS CONTROL</p>
-      <h1 id="dialog-title">Enter access code</h1>
+      <p class="eyebrow" id="dialog-label">FIELD INTERACTION</p>
+      <p class="puzzle-question-label">QUESTION</p>
+      <h1 id="dialog-title"></h1>
       <p id="dialog-agent-status" role="status"></p>
       <section id="light-panel" hidden>
-        <p>Watch five flashes, then enter the sequence here. Colors may repeat. A wrong sequence replays the lights while time keeps running.</p>
         <div class="light-preview" aria-label="Light sequence preview">
           <div data-light="1"><strong>1</strong><span>RED</span></div>
           <div data-light="2"><strong>2</strong><span>BLUE</span></div>
           <div data-light="3"><strong>3</strong><span>GREEN</span></div>
           <div data-light="4"><strong>4</strong><span>YELLOW</span></div>
         </div>
+        <p class="panel-eyebrow">SEQUENCE OBSERVED</p>
         <p id="light-current" aria-live="polite">—</p>
         <p id="light-playback-status" role="status"></p>
+        <p class="panel-eyebrow">ANSWERING</p>
+        <p id="light-answer-slots" class="light-answer-slots" aria-live="polite"></p>
         <div id="light-input" class="light-input" aria-label="Enter the light sequence"></div>
         <button id="replay-lights" type="button">Replay sequence</button>
       </section>
       <section id="memory-panel" hidden><p id="memory-notice"></p><p id="memory-preview"></p><div id="memory-answers" class="answers"></div></section>
       <section id="lock-panel">
-        <p>Your key opens the archive door. Enter its four-digit tag code. The final exit opens after the scroll puzzle.</p>
         <form id="lock-form" novalidate>
-          <label for="door-code">Four-digit code</label>
+          <label for="door-code">DOOR CODE</label>
           <input id="door-code" name="code" type="text" inputmode="numeric" pattern="[0-9]{4}" minlength="4" maxlength="4" autocomplete="off" required />
           <p id="lock-error" role="alert"></p>
-          <button type="submit">Unlock door →</button>
+          <button type="submit">Unlock →</button>
         </form>
       </section>
       <section id="document-panel" hidden>
+        <p class="panel-eyebrow">QUESTION</p>
         <p id="question-rule" class="rule"></p>
         <p id="question-prompt"></p>
+        <p class="panel-eyebrow">ANSWERING</p>
         <div id="answers" class="answers"></div>
-        <p class="note">Warning: a wrong answer still opens the gate, but may release an anomaly.</p>
       </section>
       <div class="agent-controls" hidden>
         <button id="dialog-ai-step" type="button">K2 Step</button>
         <button id="dialog-ai-pause" type="button">Pause K2</button>
       </div>
       <button id="restart-dialog" hidden class="secondary" type="button">Restart with new puzzles</button>
-      <button id="close-dialog" class="secondary" type="button">Close · ESC</button>
+      <button id="close-dialog" class="secondary" type="button">Return to room · ESC</button>
     </dialog>
       </aside>
       <aside class="rail" aria-label="Map and agent activity">
@@ -100,11 +115,9 @@
         <h2 class="log-title">DECISIONS &amp; REPORTS</h2>
         <ol id="agent-log" aria-label="K2 decision log"></ol>
       </section>
-      <section class="memory-panel" aria-label="Run memory">
-        <div class="section-heading"><h2>FIELD MEMORY</h2><span>THIS RUN</span></div>
-        <p id="memory-summary">No attempts yet.</p>
+      <section class="memory-panel" aria-label="Run memory" hidden>
+        <p id="memory-summary"></p>
         <ol id="memory-feed"></ol>
-        <p class="note">Experience is sent with the next decision. New runs reset puzzle memory; model weights are unchanged.</p>
       </section>
       </aside>
     </main>

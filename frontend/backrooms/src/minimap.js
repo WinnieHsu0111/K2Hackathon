@@ -6,7 +6,7 @@ export function createMinimap() {
   const ctx = canvas.getContext('2d');
   canvas.width = 320; canvas.height = 250;
   const cell = 8, ox = 6, oy = 12;
-  const zones = [2,6,11,14.5,16.5,20,24.5];
+  const zones = [4, 11, 22];
   return { draw(s) {
     ctx.fillStyle = '#11170f'; ctx.fillRect(0,0,320,250);
     const {index} = missionState(s);
@@ -22,6 +22,11 @@ export function createMinimap() {
       ctx.fillStyle=STAGES[i].complete(s)?'#91ac7b':i===index?'#f3dfa1':'#748465';
       ctx.fillText(`${i+1} ${STAGES[i].short}`,224,py);
     });
+    if (s.blockedPath === 'CENTER') {
+      ctx.strokeStyle='#d56f62'; ctx.lineWidth=4; ctx.setLineDash([5,3]);
+      ctx.beginPath(); ctx.moveTo(ox+12*cell,oy+10*cell); ctx.lineTo(ox+12*cell,oy+14*cell); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle='#e38a70'; ctx.font='bold 8px monospace'; ctx.fillText('BLOCKED',ox+12*cell+7,oy+12*cell);
+    }
     const dot=(p,color,r=3,label='')=>{
       const px=ox+p.x/TILE*cell, py=oy+p.y/TILE*cell;
       ctx.fillStyle=color;ctx.beginPath();ctx.arc(px,py,r,0,Math.PI*2);ctx.fill();

@@ -1,24 +1,27 @@
 import { generatePuzzles } from './puzzles.js';
 
+// Level 1: Light console C (top area), gate A
+// Level 2: Lights 1-4 scattered across the map for spatial navigation
+// Level 3: Monster M active from start, distress signal zone near exit E
 export const MAP = ['#########################',
-  '#P....1...2...3...4.....#',
+  '#P......................#',
   '#.......................#',
   '#...........C...........#',
   '############A############',
+  '#.....1.................#',
   '#.......................#',
-  '#...B...B...B...B...B...#',
+  '#...................2...#',
   '#.......................#',
-  '#...........R...........#',
   '####.#######.#######.####',
   '#.......#.......#.......#',
-  '#.......#.......#.......#',
+  '#...3...#.......#.......#',
   '#.......#.......#.......#',
   '####.#######.#######.####',
-  '#........K..............#',
+  '#........K..........4...#',
   '#.......................#',
   '############L############',
   '#####...............#####',
-  '#####TTTTTT.TTTTTTTT#####',
+  '#####...............#####',
   '#####...............#####',
   '#####.......D.......#####',
   '############G############',
@@ -31,8 +34,10 @@ export const MAP = ['#########################',
 
 export const TILE = 48;
 export const WALK_SPEED = 230;
-export const RUN_SPEED = 220;
-export const MONSTER_SPEED = 175;
+export const RUN_SPEED = WALK_SPEED;
+export const MONSTER_SPEED = WALK_SPEED;
+const AMBUSH_CHASE_TIME = 3000;
+export const SCAN_TIME = 3000;
 export const PLAYER_RADIUS = 9;
 export const MONSTER_RADIUS = 12;
 export const VISION_RANGE = 7 * TILE;
@@ -96,8 +101,6 @@ export class GameSession {
     Object.assign(this, generatePuzzles(rng));
     this.started = false;
     this.paused = false;
-    // Headless simulations start equipped for backwards-compatible game
-    // tests; the browser run always begins with the flashlight on the floor.
     this.hasFlashlight = typeof document === 'undefined';
     this.flashlight = center(2, 1);
     this.hasDocument = false;
@@ -105,13 +108,40 @@ export class GameSession {
     this.timeLeft = 180000;
     this.dead = false;
     this.deathReason = null;
-    this.memorySolved = false;
-    this.memorySeen = false;
+
+    // --- Three-level demo state ---
+    // Level 1: Light Sequence (Specialization)
+    this.demoLevel = 1;
+    this.lightPhaseAFailed = false;   // true after Supervisor's solo attempt fails
+    // Level 2: Spatial Lights (Collaboration) — 4 lights scattered on map
+    this.spatialLightsDone = [];      // which light ids have been activated (1-4)
+    this.spatialLightSequence = [];   // order K2 must activate them in (set by puzzles)
+    this.level2Solved = false;
+    // Level 3: Distress Signal (Conflict Resolution)
+    this.distressSignalActive = false;
+    this.level3Decision = null;       // 'GO_EXIT' or 'GO_SAFE'
+    this.level3Solved = false;
+    // Fields for Level 3 scenario passed to backend
+    this.health = 100;
+    this.battery = 100;
+    this.exitDistance = 12;
+    this.distressDistance = 45;
+
+    // Skip old multi-stage gates for the 3-level demo:
+    // memory, paths, and lock are auto-solved so K2 can reach Level 2/3.
+    this.memorySolved = true;
+    this.memorySeen = true;
     this.memoryPhase = 'idle';
     this.memoryRemaining = 0;
-    this.memoryConsole = locate('R');
+    this.memoryConsole = { x: 0, y: 0 };  // not used in 3-level demo
     this.pathSolved = false;
+    this.pathAmbushTriggered = false;
+    this.blockedPath = null;
+    this.correctPath = 'LEFT';
+    this.ambushChaseRemaining = 0;
+    this.scanRemaining = 0;
     this.wrongPathRespawn = center(12, 8);
+
     if (MAP.some((row) => row.length !== MAP[0].length)) throw new Error('Unequal map rows');
     this.player = locate('P');
     this.lightConsole = locate('C');
@@ -119,21 +149,23 @@ export class GameSession {
     this.lightInput = [];
     this.lightPhase = 'idle';
     this.lightElapsed = 0;
-    this.lightNotice = 'Press Play and memorize the sequence of five lights.';
+    this.lightNotice = 'Watch the three colored flashes, then repeat the sequence.';
     this.pressedLight = null;
     this.lightFlashRemaining = 0;
+
     this.key = locate('K');
     this.lock = locate('L');
     this.document = locate('D');
     this.exit = locate('E');
     this.monster = { ...locate('M'), target: null, state: MONSTER_STATE.PATROL };
-    // One tile above the doorway outside; one tile above the document.
     this.trapRoomRespawn = { x: this.lock.x, y: this.lock.y - TILE };
     this.documentRespawn = { x: this.document.x, y: this.document.y - TILE };
+
+    // Auto-open lock/gate so K2 can navigate to Level 3 area freely
     this.hasKey = false;
-    this.lockOpen = false;
-    this.gateOpen = false;
-    this.documentAnswered = false;
+    this.lockOpen = true;
+    this.gateOpen = true;
+    this.documentAnswered = true;
     this.documentAnswerId = null;
     this.monsterActive = false;
     this.patrolGoal = null;
@@ -141,18 +173,69 @@ export class GameSession {
     this.lastSeen = null;
     this.searchRemaining = 0;
     this.wakeRemaining = 0;
+    this.alarmRemaining = 0;
+    this.lightSolvedHold = 0;
     this.modal = null;
-    this.lockArmed = true;
-    this.documentArmed = true;
+    this.lockArmed = false;
+    this.documentArmed = false;
     this.won = false;
     this.respawns = 0;
-    this.message = 'Pick up the flashlight at the entrance before exploring. Press F or use the pickup button.';
+    this.message = 'Pick up the flashlight at the entrance before exploring.';
   }
 
   start() { if (!this.dead && !this.won) this.started = true; }
 
   get gameOver() { return this.dead || this.won; }
-  get aiReady() { return this.started && this.firstGateOpen && this.memorySolved && this.pathSolved && !this.gameOver; }
+  get aiReady() { return this.started && !this.gameOver; }
+
+  // Level 2: locate all 4 spatial light positions
+  get spatialLightPositions() {
+    const positions = {};
+    MAP.forEach((row, y) => [...row].forEach((ch, x) => {
+      if (Object.hasOwn(LIGHTS, ch)) positions[Number(ch)] = center(x, y);
+    }));
+    return positions;
+  }
+
+  // Level 2: K2 activates a light by walking to it
+  activateSpatialLight(id) {
+    if (this.demoLevel !== 2 || this.level2Solved) return false;
+    const pos = this.spatialLightPositions[id];
+    if (!pos || this.spatialLightsDone.includes(id)) return false;
+    if (Math.hypot(this.player.x - pos.x, this.player.y - pos.y) > TILE * 1.5) return false;
+    const nextExpected = this.spatialLightSequence[this.spatialLightsDone.length];
+    if (id !== nextExpected) {
+      this.message = `Wrong order! Expected light ${nextExpected} next. Try again.`;
+      return false;
+    }
+    this.spatialLightsDone = [...this.spatialLightsDone, id];
+    if (this.spatialLightsDone.length === this.spatialLightSequence.length) {
+      this.level2Solved = true;
+      this.demoLevel = 3;
+      // Level 3 starts: monster wakes up, distress signal appears
+      this.monsterActive = true;
+      this.distressSignalActive = true;
+      this.monster.state = MONSTER_STATE.PATROL;
+      this.health = 85;
+      this.battery = 40;
+      this.message = 'Level 2 complete! A distress signal is detected — and the MONSTER is awake. Escape or investigate?';
+    } else {
+      this.message = `Light ${id} activated (${this.spatialLightsDone.length}/${this.spatialLightSequence.length}). Next: light ${this.spatialLightSequence[this.spatialLightsDone.length]}.`;
+    }
+    return true;
+  }
+
+  // Level 3: resolve the escape-vs-investigate decision
+  resolveLevel3(intent) {
+    if (this.demoLevel !== 3 || this.level3Solved) return;
+    this.level3Decision = intent;
+    if (intent === 'GO_EXIT') {
+      this.message = 'K2 chose EXIT · Follow the red EXIT sign to escape.';
+    } else {
+      // GO_SAFE = investigate distress signal
+      this.message = 'K2 chose INVESTIGATE — resources sufficient, someone may need help.';
+    }
+  }
 
   die(reason) {
     if (this.gameOver) return;
@@ -170,6 +253,27 @@ export class GameSession {
     this.timeLeft = Math.max(0, this.timeLeft - ms);
     if (this.timeLeft === 0) { this.die('TIME OUT'); return; }
     this.updateLights(ms);
+    // Monster timers run on wall-clock time, not only while the player is moving.
+    if (this.ambushChaseRemaining > 0) {
+      this.ambushChaseRemaining = Math.max(0, this.ambushChaseRemaining - ms);
+      const escaped = tileAt(this.player).y <= tileAt(this.wrongPathRespawn).y;
+      if (escaped) this.ambushChaseRemaining = 0;
+      if (this.ambushChaseRemaining === 0) {
+        this.monster.state = MONSTER_STATE.PATROL;
+        this.monster.target = null;
+        this.scanRemaining = SCAN_TIME;
+        this.message = 'Back at the start. The creature returns to its post. Scanning 360° for another route...';
+      }
+    }
+    if (this.scanRemaining > 0) this.scanRemaining = Math.max(0, this.scanRemaining - ms);
+    if (this.alarmRemaining > 0) {
+      this.alarmRemaining = Math.max(0, this.alarmRemaining - ms);
+      if (this.alarmRemaining === 0) {
+        this.monsterActive = false;
+        this.monster.state = MONSTER_STATE.PATROL;
+        this.message = 'The creature retreated. Focus — memorize the sequence correctly this time.';
+      }
+    }
     if (this.memoryPhase === 'reveal') {
       this.memoryRemaining = Math.max(0, this.memoryRemaining - ms);
       if (!this.memoryRemaining) {
@@ -203,7 +307,11 @@ export class GameSession {
   }
 
   cell(x, y) {
-    if (y === 13 && [4,12,20].includes(x) && ['LEFT','CENTER','RIGHT'][[4,12,20].indexOf(x)] !== this.correctPath) return 'X';
+    // CENTER is the monster-guarded shortest path (handled as an ambush), RIGHT is a fake path.
+    if (y === 13 && [4,12,20].includes(x)) {
+      const lane = ['LEFT','CENTER','RIGHT'][[4,12,20].indexOf(x)];
+      if (lane !== this.correctPath && lane !== 'CENTER') return 'X';
+    }
     return MAP[y]?.[x] ?? '#';
   }
 
@@ -221,6 +329,12 @@ export class GameSession {
       return elapsed >= 0 && elapsed % LIGHT_STEP_TIME < LIGHT_ON_TIME ? this.lightSequence[index] ?? null : null;
     }
     return this.lightFlashRemaining > 0 ? this.pressedLight : null;
+  }
+
+  get lightsShown() {
+    if (this.lightPhase !== 'playback') return this.lightSequence.length;
+    const elapsed = this.lightElapsed - LIGHT_LEAD_IN;
+    return elapsed < 0 ? 0 : Math.min(this.lightSequence.length, Math.floor(elapsed / LIGHT_STEP_TIME) + 1);
   }
 
   playLightSequence(denied = false) {
@@ -244,12 +358,18 @@ export class GameSession {
       if (checkLightCode(this.lightInput, this.lightSequence)) {
         this.firstGateOpen = true;
         this.lightPhase = 'solved';
-        this.modal = null;
-        this.message = 'ACCESS GRANTED · The first gate is open. Go through door A to the memory room.';
+        // Keep the console open briefly so all three presses are visible.
+        this.lightSolvedHold = 1500;
+        this.lightNotice = 'ACCESS GRANTED · all three lights correct.';
+        this.message = `Pressed ${id} ${LIGHTS[id]} · 3/3 → ACCESS GRANTED · Go through door A.`;
       } else {
         this.modal = 'lights';
         this.playLightSequence(true);
-        this.message = 'ACCESS DENIED · The first gate is still closed. Memorize the light sequence again.';
+        this.message = 'ACCESS DENIED · Wrong sequence — the creature stirs. Memorize the sequence again.';
+        // Briefly activate monster to show consequence, then it retreats
+        this.monsterActive = true;
+        this.monster = { x: this.player.x + TILE * 5, y: this.player.y, state: MONSTER_STATE.CHASE, target: null };
+        this.alarmRemaining = 3500; // monster retreats after 3.5s
       }
     }
     return true;
@@ -259,7 +379,7 @@ export class GameSession {
     if (!this.started || this.paused || this.gameOver || this.hasFlashlight || Math.hypot(this.player.x-this.flashlight.x, this.player.y-this.flashlight.y) > TILE*1.15) return false;
     this.hasFlashlight = true;
     this.pickupSequence++;
-    this.message = 'Flashlight equipped. Follow the beam to console C and watch the five lights.';
+    this.message = 'Flashlight equipped. Follow the beam to console C and watch the three lights.';
     return true;
   }
 
@@ -299,12 +419,17 @@ export class GameSession {
 
   updateLights(ms) {
     this.lightFlashRemaining = Math.max(0, this.lightFlashRemaining - ms);
+    if (this.lightSolvedHold > 0) {
+      this.lightSolvedHold = Math.max(0, this.lightSolvedHold - ms);
+      if (this.lightSolvedHold === 0 && this.modal === 'lights') this.modal = null;
+      return;
+    }
     if (this.lightPhase !== 'playback' || this.modal !== 'lights') return;
     this.lightElapsed += ms;
     if (this.lightElapsed >= LIGHT_LEAD_IN + this.lightSequence.length * LIGHT_STEP_TIME) {
       this.lightPhase = 'input';
-      this.lightNotice = 'Playback complete. Enter all five lights using the buttons below.';
-      this.message = 'Enter the five-light sequence at console C. Repeated colors are allowed.';
+      this.lightNotice = 'Playback complete. Enter all three lights using the buttons below.';
+      this.message = 'Enter the three-light sequence at console C. Repeated colors are allowed.';
     }
   }
 
@@ -356,8 +481,19 @@ export class GameSession {
         this.message = 'FALSE PATH · Returned to the entrance. Try a different corridor.';
         return true;
       }
+      if (!this.pathAmbushTriggered && !this.pathSolved && current.x === 12 && current.y === 10) {
+        this.pathAmbushTriggered = true;
+        this.blockedPath = 'CENTER';
+        this.monsterActive = true;
+        this.monster = { ...center(12, 12), state: MONSTER_STATE.CHASE, target: null };
+        this.ambushChaseRemaining = AMBUSH_CHASE_TIME;
+        this.message = 'AMBUSH · The shortest path is guarded. RUN!';
+      }
       if (current.y === 14 && !this.pathSolved) {
         this.pathSolved = true;
+        this.demoLevel = 3;
+        this.distressSignalActive = true;
+        this.monsterActive = true;
         this.message = 'Path verified. Find the key and read its code.';
       }
       if (this.occupied(this.player).some(({ x, y }) => this.cell(x, y) === 'T')) {
@@ -395,7 +531,7 @@ export class GameSession {
     // M faces G directly. A brief awakening delay gives the player time to cross the gate and turn toward the safe zone.
     this.wakeRemaining = this.monsterActive ? WAKE_TIME : 0;
     this.message = this.monsterActive
-      ? 'Incorrect answer. The gate is open, and the anomaly is awakening! Enter the teal safe zone and wait for it to patrol away.'
+      ? 'Incorrect answer. The gate is open, and the MONSTER is awakening! Enter the teal safe zone and wait for it to patrol away.'
       : `Correct answer: ${this.question.explanation} The gate is open. Find the final exit.`;
     return true;
   }
@@ -429,10 +565,12 @@ export class GameSession {
   changeMonsterState(next) {
     if (this.monster.state === next) return;
     this.monster.state = next;
-    // Return to the center of the current tile before turning to avoid cutting diagonally through wall corners when changing state.
-    const tile = tileAt(this.monster);
-    const point = center(tile.x, tile.y);
-    this.monster.target = Math.hypot(point.x - this.monster.x, point.y - this.monster.y) > 0.01 ? point : null;
+    // Finish the current segment before replanning: visibility changes must
+    // not reverse the monster toward the tile center on every frame.
+    if (!this.monster.target) {
+      const tile = tileAt(this.monster), point = center(tile.x, tile.y);
+      this.monster.target = Math.hypot(point.x-this.monster.x, point.y-this.monster.y) > .01 ? point : null;
+    }
     if (next === MONSTER_STATE.PATROL) this.patrolGoal = null;
     if (next === MONSTER_STATE.SEARCH) this.searchRemaining = SEARCH_TIME;
   }
@@ -459,6 +597,29 @@ export class GameSession {
 
   updateMonster(ms) {
     if (!this.monsterActive) return;
+    // The first ambush is a visible teaching moment, not an instant death:
+    // freeze the monster while K2 records CENTER as blocked and retreats.
+    if (this.blockedPath === 'CENTER' && !this.pathSolved) {
+      // Ambush: chase briefly, then return to guard the center corridor.
+      const chasing = this.ambushChaseRemaining > 0;
+      this.monster.state = chasing ? MONSTER_STATE.CHASE : MONSTER_STATE.PATROL;
+      const goal = chasing ? tileAt(this.player) : { x: 12, y: 12 };
+      if (!this.monster.target) {
+        const path = findPath(tileAt(this.monster), goal, (x, y) => this.canEnter(x, y, true));
+        if (path[1]) this.monster.target = center(path[1].x, path[1].y);
+      }
+      const t = this.monster.target;
+      if (t) {
+        const dx = t.x - this.monster.x, dy = t.y - this.monster.y, d = Math.hypot(dx, dy);
+        const step = Math.min(d, MONSTER_SPEED * ms / 1000);
+        if (d > 0) { this.monster.x += dx / d * step; this.monster.y += dy / d * step; }
+        if (d <= step) this.monster.target = null;
+      }
+      if (Math.hypot(this.player.x - this.monster.x, this.player.y - this.monster.y) < PLAYER_RADIUS + MONSTER_RADIUS) {
+        this.die('CAUGHT BY THE MONSTER');
+      }
+      return;
+    }
     if (this.playerInSafeZone) {
       this.patrolAvoid = tileAt(this.player);
       this.changeMonsterState(MONSTER_STATE.PATROL);

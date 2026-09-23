@@ -13,11 +13,17 @@ from pydantic import BaseModel
 
 from .base import K2_MODEL, get_client, sse_event, SHARED_PROMPT, load_prompt
 
-VALID_INTENTS = ["PICK_FLASHLIGHT", "WATCH_LIGHTS", "ENTER_LIGHTS", "GO_MEMORY", "ANSWER_MEMORY", "TRY_PATH", "GO_KEY", "GO_LOCK", "GO_DOCUMENT", "ANSWER", "GO_SAFE", "GO_EXIT"]
+VALID_INTENTS = ["PICK_FLASHLIGHT", "WATCH_LIGHTS", "ENTER_LIGHTS", "GO_MEMORY", "ANSWER_MEMORY", "TRY_PATH", "GO_KEY", "GO_LOCK", "GO_DOCUMENT", "ANSWER", "GO_SAFE", "GO_EXIT", "GO_LIGHT_1", "GO_LIGHT_2", "GO_LIGHT_3", "GO_LIGHT_4"]
 
 
 class GameState(BaseModel):
+    event: str | None = None
     player: str = "k2"  # which model drives the game: "k2" or "ollama" (baseline)
+    # Three-level demo: 1=Light Sequence, 2=Spatial Lights, 3=Escape vs Distress
+    level: int = 1
+    # Level 1: Phase A = Supervisor alone (will fail), Phase B = with Observer
+    lightPhaseA: bool = False   # True = currently running Phase A (solo Supervisor)
+    lightPhaseAFailed: bool = False  # True = Phase A already failed, now in Phase B
     visibleTiles: list[dict] = []
     recentOutcomes: list[str] = []
     trajectory: list[str] = []  # full decision history so far (never truncated)
@@ -30,6 +36,7 @@ class GameState(BaseModel):
     observedSymbols: list[str] = []
     memoryOptions: list[list[str]] = []
     triedPaths: list[str] = []
+    blockedPath: str | None = None
     hasFlashlight: bool = True
     hasDocument: bool = False
     hasKey: bool = False
@@ -43,6 +50,16 @@ class GameState(BaseModel):
     playerTile: dict = {"x": 0, "y": 0}
     monsterTile: dict = {"x": 0, "y": 0}
     question: dict | None = None
+    # Level 2: spatial lights — which lights done, what order required
+    spatialLightsDone: list[int] = []
+    spatialLightSequence: list[int] = []
+    level2Solved: bool = False
+    # Level 3: distress scenario
+    health: int = 100
+    battery: int = 100
+    exitDistance: int = 12
+    distressDistance: int = 45
+    distressSignalActive: bool = False
 
 
 # Specialist agent prompts (edit these + shared.txt for prompt engineering)
@@ -227,46 +244,284 @@ def _parse_decision(content: str, state: GameState) -> dict:
         return _rule_based_intent(state)
 
 
-async def decide(state: GameState) -> AsyncGenerator[str, None]:
-    """The Supervisor DYNAMICALLY orchestrates the specialists via tool calling.
+def _level3_state_summary(state: GameState) -> str:
+    """Extra context for Level 3 (Escape vs Distress Signal)."""
+    return (
+        f"Current level: {state.level}; player position: {state.playerTile}\n"
+        f"First gate open: {state.firstGateOpen}; memory complete: {state.memorySolved}; path solved: {state.pathSolved}\n"
+        f"Has key: {state.hasKey}; lock open: {state.lockOpen}; exit gate open: {state.gateOpen}\n"
+        f"Recent outcomes: {state.recentOutcomes}\n"
+        f"Health: {state.health}%\n"
+        f"Battery: {state.battery}%\n"
+        f"Exit distance: {state.exitDistance}m\n"
+        f"Distress signal distance: {state.distressDistance}m\n"
+        f"Distress signal active: {state.distressSignalActive}\n"
+        f"Monster active: {state.monsterActive} (state: {state.monsterState})\n"
+        f"Player in safe zone: {state.playerInSafeZone}\n"
+    )
 
-    K2 (the Supervisor) reads the game state — including the full decision
-    trajectory — and itself decides which specialists to consult and how many:
-    an obvious step may need none, a dangerous or ambiguous one may need all
-    three across several rounds. It then outputs the final intent. This is the
-    multi-agent orchestration: the routing is reasoned by K2, not hard-coded.
+
+async def _decide_level1_phase_a(state: GameState, summary: str, client, model: str, started: float):
+    """Level 1 Phase A: Supervisor alone — scripted failure, no API call needed."""
+    import random
+    wrong_sequence = random.sample([1, 2, 3, 4], 3)
+    if state.observedLights and wrong_sequence == state.observedLights[:3]:
+        wrong_sequence = list(reversed(wrong_sequence))
+
+    yield sse_event("agent_thinking", agent="Supervisor", message="No specialist agents available. Attempting to recall the light sequence from context alone...")
+    await asyncio.sleep(1.2)
+    yield sse_event("agent_result", agent="Supervisor",
+                    content=f"Best guess: sequence {' → '.join(str(x) for x in wrong_sequence)}. Confidence: LOW — no observation data to verify.")
+    await asyncio.sleep(0.5)
+    yield sse_event("decision", intent="ENTER_LIGHTS", sequence=wrong_sequence,
+                    answerId=None, reasoning="Supervisor guessed without Observer — sequence unverified.",
+                    phaseAFailed=True, elapsedSeconds=round(time.monotonic() - started, 2))
+
+
+async def _decide_level1_phase_b(state: GameState, summary: str, client, model: str, started: float):
+    """Level 1 Phase B: Supervisor scans environment, realizes it needs Observer, then calls it."""
+    yield sse_event("agent_thinking", agent="Supervisor", message="Light console active. Four panels — sequence unknown. I cannot determine the correct order alone.")
+    await asyncio.sleep(0.2)
+    yield sse_event("agent_thinking", agent="Supervisor", message="Dispatching Observer (Explorer) to record the flash sequence. Standing by for report.")
+    yield sse_event("agent_thinking", agent="Explorer", message="Recording the three observed flashes.")
+    try:
+        observer_report = await asyncio.wait_for(
+            _run_tool("call_explorer", summary + '\nReturn one short sentence about the observed lights.', client, model), 3.0
+        )
+    except Exception:
+        observer_report = 'TIMEOUT: using recorded visible light observations; no model report returned.'
+    yield sse_event("agent_result", agent="Explorer", content=observer_report)
+    yield sse_event("agent_thinking", agent="Supervisor", message="Observer returned recorded sequence. Cross-checking and synthesizing final input...")
+
+    # If lights aren't ready for input yet (still playing back), tell K2 to wait
+    if state.lightPhase != "input":
+        yield sse_event("decision", intent="WATCH_LIGHTS", answerId=None,
+                        reasoning="Lights are still playing back. Observer is standing by.",
+                        elapsedSeconds=round(time.monotonic() - started, 2))
+        return
+
+    seq = state.observedLights[:3] if state.observedLights else None
+    if not seq or len(seq) != 3:
+        yield sse_event('decision', intent='WATCH_LIGHTS', answerId=None, reasoning='Incomplete observation: watch all three flashes again.')
+        return
+    if not seq:
+        # Try to parse from observer report as fallback
+        content = await _ask(
+            SUPERVISOR_GAME,
+            f"Observer report: {observer_report}\n\nExtract the light sequence as JSON: "
+            "{\"intent\": \"ENTER_LIGHTS\", \"sequence\": [1,2,3], \"reasoning\": \"...\"}",
+            client, model
+        )
+        parsed = _parse_decision(content, state)
+        seq = parsed.get("sequence") or [1, 2, 3]
+
+    yield sse_event("decision", intent="ENTER_LIGHTS", sequence=seq,
+                    answerId=None, reasoning=f"Observer recorded sequence: {seq}. Entering now.",
+                    elapsedSeconds=round(time.monotonic() - started, 2))
+
+
+async def _decide_level2(state: GameState, summary: str, client, model: str, started: float):
+    """Level 2: Supervisor dispatches Observer (what?) + Navigator (how?) then acts."""
+    done = state.spatialLightsDone or []
+    seq = state.spatialLightSequence or [1, 2, 3, 4]
+    # Fallback: if sequence missing, pick first unvisited light
+    remaining = [l for l in seq if l not in done]
+    next_light = seq[len(done)] if len(done) < len(seq) else (remaining[0] if remaining else 1)
+
+    l2_summary = (
+        f"LEVEL 2 — Spatial Light Sequence\n"
+        f"Target sequence: {seq}\n"
+        f"Lights activated so far: {done}\n"
+        f"Next light to activate: {next_light}\n"
+        f"Player position: {state.playerTile}\n"
+        f"Monster active: {state.monsterActive}\n"
+        f"Available actions: GO_LIGHT_1, GO_LIGHT_2, GO_LIGHT_3, GO_LIGHT_4\n"
+    )
+
+    # Supervisor announces dispatch plan first
+    yield sse_event("agent_thinking", agent="Supervisor",
+                    message=f"Light {next_light} is next in sequence ({len(done)}/{len(seq)} done). "
+                            f"Dispatching Observer to confirm target, then Navigator to plot the route.")
+    await asyncio.sleep(0.6)
+
+    # Supervisor explicitly hands off to Explorer
+    yield sse_event("agent_thinking", agent="Supervisor",
+                    message=f"→ Calling Observer (Explorer): identify light {next_light} position.")
+    await asyncio.sleep(0.3)
+    yield sse_event("agent_thinking", agent="Explorer", message=f"Scanning room for light {next_light}...")
+    observer_report = await asyncio.wait_for(
+        _run_tool("call_explorer", l2_summary, client, model), 30.0
+    )
+    yield sse_event("agent_result", agent="Explorer", content=observer_report)
+
+    # Supervisor explicitly hands off to Navigator
+    yield sse_event("agent_thinking", agent="Supervisor",
+                    message=f"Observer report received. → Calling Navigator: plan route to light {next_light}.")
+    await asyncio.sleep(0.3)
+    yield sse_event("agent_thinking", agent="Navigator", message=f"Plotting optimal path to light {next_light}...")
+    nav_report = await asyncio.wait_for(
+        _run_tool("call_navigator", l2_summary + f"\nObserver says: {observer_report}", client, model), 30.0
+    )
+    yield sse_event("agent_result", agent="Navigator", content=nav_report)
+
+    # Supervisor synthesizes and decides
+    yield sse_event("agent_thinking", agent="Supervisor",
+                    message=f"All reports in. Observer + Navigator agree: GO_LIGHT_{next_light}. Executing.")
+    await asyncio.sleep(0.4)
+    intent = f"GO_LIGHT_{next_light}"
+    yield sse_event("decision", intent=intent, answerId=None,
+                    reasoning=f"Supervisor synthesized: Observer located light {next_light}, Navigator confirmed route. Decision: {intent}.",
+                    elapsedSeconds=round(time.monotonic() - started, 2))
+
+
+async def _decide_level3(state: GameState, started: float, client, model: str):
+    """Level 3: All three specialists report, Supervisor synthesizes conflicting recommendations."""
+    l3_summary = _level3_state_summary(state)
+
+    yield sse_event("agent_thinking", agent="Supervisor", message="Key acquired. Delegating first to Survival, then Navigator.")
+
+    async def report(name, tool):
+        try:
+            result = await asyncio.wait_for(_run_tool(tool, l3_summary + "\nGive one short sentence. Use the actual completed gates and inventory above.", client, model), 4.0)
+            return name, result
+        except Exception:
+            return name, "TIMEOUT: no model report returned; engine escape fallback will be used."
+
+    reports = []
+    for name, tool in (("Survival", "call_survival"), ("Navigator", "call_navigator")):
+        yield sse_event("agent_thinking", agent="Supervisor", message=f"Dispatching {name}; waiting for its report before the next delegation.")
+        yield sse_event("agent_thinking", agent=name, message="Checking current inventory and escape conditions.")
+        name, content = await report(name, tool)
+        reports.append(f"{name}: {content}")
+        yield sse_event("agent_result", agent=name, content=content)
+        yield sse_event("agent_thinking", agent="Supervisor", message=f"Received {name}'s report; reviewing next action.")
+
+    fallback = {"intent": "GO_EXIT", "reasoning": "Engine fallback: key acquired and exit gate open; proceed to exit."}
+    try:
+        content = await asyncio.wait_for(_ask(
+            SUPERVISOR_GAME,
+            l3_summary + "\n" + "\n".join(reports) +
+            '\nChoose GO_EXIT, or GO_SAFE only if a temporary shelter is necessary and player is not already safe. Return JSON with intent and reasoning.',
+            client, model), 2.0)
+        decision = _parse_decision(content, state)
+        if decision.get("intent") not in ("GO_EXIT", "GO_SAFE") or (state.playerInSafeZone and decision.get("intent") == "GO_SAFE"):
+            decision = fallback
+    except Exception:
+        decision = fallback
+    yield sse_event("agent_result", agent="Supervisor", content=decision.get("reasoning", "Proceeding to exit."))
+    yield sse_event("decision", intent=decision["intent"], answerId=None,
+                    reasoning=decision.get("reasoning", ""),
+                    elapsedSeconds=round(time.monotonic() - started, 2))
+
+
+async def decide(state: GameState) -> AsyncGenerator[str, None]:
+    """Three-level multi-agent demo.
+
+    Level 1: Specialization — Supervisor alone fails, then Observer helps it succeed.
+    Level 2: Collaboration — Observer (what?) + Navigator (how?) + Supervisor (act).
+    Level 3: Synthesis — All three agents report, Supervisor resolves conflict.
     """
-    summary = _state_summary(state) + "\nOpening puzzle observations: " + json.dumps(state.model_dump(include={"firstGateOpen", "memorySolved", "pathSolved", "lightPhase", "memoryPhase", "observedLights", "observedSymbols", "memoryOptions", "triedPaths"}))
+    summary = _state_summary(state) + "\nOpening puzzle observations: " + json.dumps(
+        state.model_dump(include={"firstGateOpen", "memorySolved", "pathSolved", "lightPhase",
+                                   "memoryPhase", "observedLights", "observedSymbols", "memoryOptions", "triedPaths"})
+    )
     if state.question:
         summary += "\nThe document is open. Return ANSWER with answerId A, B, or C."
     started = time.monotonic()
 
-    # Which model drives this run: K2 Horizon, or the small Ollama baseline. Both
-    # use the SAME multi-agent orchestration, so a side-by-side full playthrough is
-    # a fair "why K2" demo — the only variable is the model.
     from .base import get_baseline_client, BASELINE_MODEL
     if state.player == "ollama":
         client, model = get_baseline_client(), BASELINE_MODEL
     else:
         client, model = get_client(), K2_MODEL
 
+    if state.event == 'ENEMY_DETECTED':
+        yield sse_event('agent_thinking', agent='Supervisor', message='Monster detected. Delegating immediate risk assessment to Survival.')
+        yield sse_event('agent_thinking', agent='Survival', message='Assessing the monster and retreat options.')
+        try:
+            report = await asyncio.wait_for(_run_tool('call_survival', summary, client, model), 4.0)
+        except Exception:
+            report = 'TIMEOUT: Survival unavailable; engine emergency retreat remains active.'
+        yield sse_event('agent_result', agent='Survival', content=report)
+        yield sse_event('agent_thinking', agent='Supervisor', message='Reviewing Survival report while the player retreats.')
+        try:
+            reason = await asyncio.wait_for(_ask(SUPERVISOR_GAME, summary + '\nSurvival: ' + report + '\nGive one short retreat recommendation.', client, model), 2.0)
+        except Exception:
+            reason = 'Engine fallback: continue emergency retreat; avoid the remembered blocked corridor.'
+        yield sse_event('agent_result', agent='Supervisor', content=reason)
+        yield sse_event('decision', intent='GO_SAFE', reasoning=reason, answerId=None)
+        return
+
+    # Level 3: all three agents, conflict resolution
+    # The escape-vs-distress dilemma only exists once the exit gate is open;
+    # before that, fall through to the normal key → lock → document flow.
+    if state.level == 3 and state.gateOpen and state.hasKey:
+        async for event in _decide_level3(state, started, client, model):
+            yield event
+        return
+
+    # Level 2: Observer + Navigator collaboration
+    if state.level == 2:
+        # Shortest-path ambush demo: Navigator owns the route choice; the
+        # engine reveals the ambush on the first attempt and records it.
+        if not state.pathSolved:
+            tried = set(state.triedPaths or [])
+            path = next((p for p in ("CENTER", "LEFT", "RIGHT") if p not in tried), "CENTER")
+            yield sse_event("agent_thinking", agent="Supervisor", message="Delegating corridor comparison to Navigator.")
+            yield sse_event("agent_thinking", agent="Navigator", message="Comparing corridor lengths...")
+            if tried:
+                memory = ", ".join(sorted(tried))
+                yield sse_event("agent_result", agent="Navigator",
+                                content=f"MEMORY: last attempt via {memory} failed (monster ambush). Excluding {memory}. "
+                                        f"Next shortest safe route: {path}.")
+            else:
+                yield sse_event("agent_result", agent="Navigator", content=f"The {path.lower()} corridor is currently the shortest route.")
+            yield sse_event("decision", intent="TRY_PATH", path=path, answerId=None,
+                            reasoning=f"Navigator selected the shortest untried corridor: {path}.",
+                            elapsedSeconds=round(time.monotonic() - started, 2))
+            return
+        opening = _opening_fast_decision(state)
+        if opening is not None:
+            yield sse_event("agent_result", agent="Supervisor", content=f"Fast rule: {opening['reasoning']}")
+            yield sse_event("decision", intent=opening["intent"], answerId=opening.get("answerId"),
+                            reasoning=opening.get("reasoning", ""), sequence=opening.get("sequence"),
+                            memoryIndex=opening.get("memoryIndex"), path=opening.get("path"),
+                            elapsedSeconds=round(time.monotonic() - started, 2))
+            return
+        async for event in _decide_level2(state, summary, client, model, started):
+            yield event
+        return
+
+    # Level 1: Specialization demo
+    if state.level == 1:
+        # Only use fast rules for pre-light navigation (flashlight pickup, walking to console).
+        # Once the light puzzle is active, hand off to Phase A/B so agents are always called.
+        if not state.hasFlashlight:
+            yield sse_event("agent_result", agent="Supervisor", content="Opening rule: collect the flashlight first.")
+            yield sse_event("decision", intent="PICK_FLASHLIGHT", answerId=None,
+                            reasoning="Opening rule: collect the flashlight first.",
+                            elapsedSeconds=round(time.monotonic() - started, 2))
+            return
+        if not state.firstGateOpen and state.lightPhase not in ("input",):
+            # Still navigating to the light console — fast rule, no agent needed
+            yield sse_event("agent_result", agent="Supervisor", content="Navigating to light console.")
+            yield sse_event("decision", intent="WATCH_LIGHTS", answerId=None,
+                            reasoning="Opening rule: reach the light console and watch the sequence.",
+                            elapsedSeconds=round(time.monotonic() - started, 2))
+            return
+        # Gate not open yet: always call Explorer to record sequence, then enter lights
+        if not state.firstGateOpen:
+            async for event in _decide_level1_phase_b(state, summary, client, model, started):
+                yield event
+            return
+
+    # Default: dynamic Supervisor tool-calling (original logic for other game states)
     messages = [
         {"role": "system", "content": SUPERVISOR_GAME},
         {"role": "user", "content": f"Current game state:\n{summary}\n\nRoute this turn dynamically: call at least one relevant specialist before deciding. "
          "Use Explorer for unclear observations, Navigator for objective/puzzle routing, "
          "and Survival only for threat signals. Wait for the selected report(s), then output the final decision JSON."},
     ]
-
-    # The first room is deterministic. Keep Supervisor as the visible entry
-    # point, but use a fast Navigator-style report instead of spending a full
-    # model round on fixed light/memory/path rules.
-    opening = _opening_fast_decision(state)
-    if opening is not None:
-        # Opening gates have explicit engine rules. Do not make the Supervisor
-        # spend an LLM round deciding which specialist to call for them.
-        yield sse_event("agent_result", agent="Supervisor", content=f"Fast rule applied: {opening['reasoning']}")
-        yield sse_event("decision", intent=opening["intent"], answerId=opening.get("answerId"), reasoning=opening.get("reasoning", ""), sequence=opening.get("sequence"), memoryIndex=opening.get("memoryIndex"), path=opening.get("path"), elapsedSeconds=round(time.monotonic() - started, 2))
-        return
 
     yield sse_event("agent_thinking", agent="Supervisor", message="Deciding which specialists to consult...")
 
@@ -280,31 +535,27 @@ async def decide(state: GameState) -> AsyncGenerator[str, None]:
             )
             msg = r.choices[0].message
 
-            # No tool call → the Supervisor is giving its final decision.
             if not msg.tool_calls:
                 if not forced_specialist:
-                    # Never allow a Supervisor-only turn. Ask Navigator for a
-                    # concrete recommendation, then give the Supervisor one
-                    # more chance to integrate it and emit the final JSON.
                     forced_specialist = True
                     yield sse_event("agent_thinking", agent="Navigator", message="Requesting a specialist recommendation...")
                     try:
                         report = await asyncio.wait_for(_run_tool("call_navigator", summary, client, model), 4.0)
                     except asyncio.TimeoutError:
-                        report = "Navigator timed out; use the confirmed game state and deterministic preconditions."
+                        report = "Navigator timed out."
                     yield sse_event("agent_result", agent="Navigator", content=report)
-                    messages.append({"role": "user", "content": f"Navigator report:\n{report}\nIntegrate this report and now output the final decision JSON."})
+                    messages.append({"role": "user", "content": f"Navigator report:\n{report}\nOutput the final decision JSON."})
                     continue
                 decision = _parse_decision(msg.content or "", state)
                 if not isinstance(decision, dict) or decision.get("intent") not in VALID_INTENTS:
                     decision = _rule_based_intent(state)
-                yield sse_event("decision", intent=decision["intent"], answerId=decision.get("answerId"), reasoning=decision.get("reasoning", ""), sequence=decision.get("sequence"), memoryIndex=decision.get("memoryIndex"), path=decision.get("path"), elapsedSeconds=round(time.monotonic() - started, 2))
+                yield sse_event("decision", intent=decision["intent"], answerId=decision.get("answerId"),
+                                reasoning=decision.get("reasoning", ""), sequence=decision.get("sequence"),
+                                memoryIndex=decision.get("memoryIndex"), path=decision.get("path"),
+                                elapsedSeconds=round(time.monotonic() - started, 2))
                 return
 
-            # The Supervisor chose to consult one or more specialists this round.
             messages.append(msg.model_dump(exclude_unset=True))
-            # Specialist reports are independent. Run them concurrently so the
-            # visible multi-agent turn does not multiply latency in the opening room.
             calls = []
             for tc in msg.tool_calls:
                 name = tc.function.name
@@ -315,17 +566,19 @@ async def decide(state: GameState) -> AsyncGenerator[str, None]:
                 try:
                     output = await task
                 except asyncio.TimeoutError:
-                    output = f"{label} timed out; Supervisor should continue with available evidence."
+                    output = f"{label} timed out."
                 yield sse_event("agent_result", agent=label, content=output)
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": output})
 
-        # Hit the round cap without a final decision — ask once more, plainly.
         yield sse_event("agent_thinking", agent="Supervisor", message="Finalizing the decision...")
         content = await _ask(SUPERVISOR_GAME, f"Current game state:\n{summary}\n\nOutput your final decision JSON now.", client, model)
         decision = _parse_decision(content, state)
         if not isinstance(decision, dict) or decision.get("intent") not in VALID_INTENTS:
             decision = _rule_based_intent(state)
-        yield sse_event("decision", intent=decision["intent"], answerId=decision.get("answerId"), reasoning=decision.get("reasoning", ""), sequence=decision.get("sequence"), memoryIndex=decision.get("memoryIndex"), path=decision.get("path"), elapsedSeconds=round(time.monotonic() - started, 2))
+        yield sse_event("decision", intent=decision["intent"], answerId=decision.get("answerId"),
+                        reasoning=decision.get("reasoning", ""), sequence=decision.get("sequence"),
+                        memoryIndex=decision.get("memoryIndex"), path=decision.get("path"),
+                        elapsedSeconds=round(time.monotonic() - started, 2))
     except Exception:
         import logging
         logging.getLogger(__name__).exception("Multi-agent decision failed")

@@ -1,7 +1,7 @@
-import { TILE, WALK_SPEED, RUN_SPEED, center, tileAt, findPath } from './level.js';
+import { TILE, WALK_SPEED, RUN_SPEED, SCAN_TIME, center, tileAt, findPath } from './level.js';
 import { getObservation } from './observation.js';
 
-export const INTENTS = Object.freeze(['PICK_FLASHLIGHT', 'WATCH_LIGHTS', 'ENTER_LIGHTS', 'GO_MEMORY', 'ANSWER_MEMORY', 'TRY_PATH', 'GO_KEY', 'GO_LOCK', 'GO_DOCUMENT', 'ANSWER', 'GO_SAFE', 'GO_EXIT']);
+export const INTENTS = Object.freeze(['PICK_FLASHLIGHT', 'WATCH_LIGHTS', 'ENTER_LIGHTS', 'GO_MEMORY', 'ANSWER_MEMORY', 'TRY_PATH', 'GO_KEY', 'GO_LOCK', 'GO_DOCUMENT', 'ANSWER', 'GO_SAFE', 'GO_EXIT', 'GO_LIGHT_1', 'GO_LIGHT_2', 'GO_LIGHT_3', 'GO_LIGHT_4']);
 
 export function buildAgentState(session, evidence = {}, trajectory = []) {
   const observation = getObservation(session);
@@ -10,21 +10,38 @@ export function buildAgentState(session, evidence = {}, trajectory = []) {
     firstGateOpen: session.firstGateOpen, memorySolved: session.memorySolved, pathSolved: session.pathSolved,
     lightPhase: session.lightPhase, memoryPhase: session.memoryPhase,
     observedLights: evidence.lights || [], observedSymbols: evidence.symbols || [],
-    memoryOptions: session.modal === 'memory' && session.memoryPhase === 'input' ? session.memoryOptions : [],
+    memoryOptions: [],
     triedPaths: evidence.triedPaths || [],
     recentOutcomes: evidence.outcomes || [],
-    // Full decision history so far — K2 reasons over the entire trajectory.
     trajectory: trajectory || [],
     visibleTiles: observation.surroundings,
-    atDocument: session.modal === 'document',
     hasKey: session.hasKey, lockOpen: session.lockOpen, gateOpen: session.gateOpen,
     documentAnswered: session.documentAnswered,
     monsterActive: observation.monster.visible || observation.monster.heard,
     playerInSafeZone: session.playerInSafeZone,
+    blockedPath: session.blockedPath || null,
     monsterState: observation.monster.visible ? session.monster.state : 'UNKNOWN',
     playerTile: tileAt(session.player),
     monsterTile: observation.monster.visible ? tileAt(session.monster) : {},
-    question: observation.interaction.document ?? null,
+    question: session.question ? {
+      prompt: session.question.prompt,
+      rule: session.question.rule,
+      options: session.question.options,
+      correctId: session.question.correctId,
+    } : null,
+    atDocument: session.modal === 'document',
+    // Three-level demo state
+    level: session.demoLevel || 1,
+    lightPhaseAFailed: session.lightPhaseAFailed || false,
+    spatialLightsDone: session.spatialLightsDone || [],
+    spatialLightSequence: session.spatialLightSequence || [],
+    level2Solved: session.level2Solved || false,
+    // Level 3 scenario fields
+    health: session.health || 100,
+    battery: session.battery || 100,
+    exitDistance: session.exitDistance || 12,
+    distressDistance: session.distressDistance || 45,
+    distressSignalActive: session.distressSignalActive || false,
   };
 }
 
@@ -35,7 +52,8 @@ export function validateDecision(value) {
   if (value.intent === 'ANSWER_MEMORY' && ![0,1,2].includes(value.memoryIndex)) throw new Error('Invalid memory choice from K2.');
   if (value.intent === 'TRY_PATH' && !['LEFT','CENTER','RIGHT'].includes(value.path)) throw new Error('Invalid path from K2.');
   return { sequence: value.sequence, memoryIndex: value.memoryIndex, path: value.path, intent: value.intent, answerId: value.answerId ?? null,
-    reason: typeof value.reasoning === 'string' ? value.reasoning.slice(0, 500) : '' };
+    reason: typeof value.reasoning === 'string' ? value.reasoning.slice(0, 500) : '',
+    phaseAFailed: value.phaseAFailed || false };
 }
 
 // fetch is required: this endpoint uses POST, which EventSource cannot send.
@@ -87,8 +105,28 @@ export async function requestDecision(baseUrl, state, signal, fetcher = fetch, o
 
 export function planIntent(session, decision) {
   const { intent, answerId } = decision;
-  const early = ['PICK_FLASHLIGHT', 'WATCH_LIGHTS', 'ENTER_LIGHTS', 'GO_MEMORY', 'ANSWER_MEMORY', 'TRY_PATH'];
+  const early = ['PICK_FLASHLIGHT', 'WATCH_LIGHTS', 'ENTER_LIGHTS', 'GO_MEMORY', 'ANSWER_MEMORY', 'TRY_PATH', 'GO_LIGHT_1', 'GO_LIGHT_2', 'GO_LIGHT_3', 'GO_LIGHT_4'];
   if (!session.aiReady && !early.includes(intent)) throw new Error('K2 must complete the opening puzzles first.');
+
+  // Level 2: navigate to a scattered light and activate it
+  if (['GO_LIGHT_1','GO_LIGHT_2','GO_LIGHT_3','GO_LIGHT_4'].includes(intent)) {
+    const lightId = Number(intent.slice(-1));
+    const positions = session.spatialLightPositions;
+    const target = positions[lightId];
+    if (!target) throw new Error(`Light ${lightId} not found on map.`);
+    const tile = tileAt(target);
+    const path = findPath(tileAt(session.player), tile, (x,y) => session.canEnter(x,y));
+    if (!path.length) throw new Error(`Light ${lightId} is unreachable.`);
+    return path.map(({x,y}) => center(x,y));
+  }
+
+  // Level 3: exit = go to exit tile; investigate = go to distress signal area (near M spawn)
+  if (intent === 'GO_EXIT' && session.demoLevel === 3) {
+    session.resolveLevel3('GO_EXIT');
+  }
+  if (intent === 'GO_SAFE' && session.demoLevel === 3 && session.distressSignalActive) {
+    session.resolveLevel3('GO_SAFE');
+  }
   if (intent === 'PICK_FLASHLIGHT') {
     if (session.hasFlashlight) return [];
     const target = tileAt(session.flashlight);
@@ -130,7 +168,10 @@ export function planIntent(session, decision) {
   if (intent === 'GO_EXIT' && !session.gateOpen) throw new Error('The gate before the exit is not open yet.');
   const start = tileAt(session.player);
   let goals;
-  if (intent === 'GO_SAFE') {
+  if (intent === 'GO_SAFE' && session.blockedPath === 'CENTER' && !session.pathSolved) {
+    // Retreat to the corridor-choice starting point.
+    goals = [tileAt(session.wrongPathRespawn)];
+  } else if (intent === 'GO_SAFE') {
     goals = [];
     // Navigation is owned by the game engine; these coordinates never go to K2.
     for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
@@ -143,7 +184,12 @@ export function planIntent(session, decision) {
     goals = intent === 'GO_LOCK' ? [{ x: tile.x, y: tile.y - 1 }] : [tile];
   }
   const paths = goals.map((goal) => findPath(start, goal,
-    (x, y) => session.canEnter(x, y) && !['T','X'].includes(session.cell(x, y))))
+    (x, y) => session.canEnter(x, y) && !['T','X'].includes(session.cell(x, y))
+      && (!(session.hasKey && session.monsterActive) || (x === start.x && y === start.y)
+        || !session.hasLineOfSight(session.monster, center(x,y))
+        || Math.hypot(x - tileAt(session.monster).x, y - tileAt(session.monster).y) > 1.25
+        || Math.hypot(x - tileAt(session.monster).x, y - tileAt(session.monster).y)
+          > Math.hypot(start.x - tileAt(session.monster).x, start.y - tileAt(session.monster).y))))
     .filter((path) => goals.some((g) => path.at(-1).x === g.x && path.at(-1).y === g.y));
   if (!paths.length) throw new Error('The target is currently unreachable. AI stopped.');
   paths.sort((a, b) => a.length - b.length);
@@ -162,7 +208,7 @@ export class AgentController {
     // over the ENTIRE run so far, using its long context. The longer K2 plays,
     // the more history it carries. This is the core "why K2" mechanism.
     this.trajectory = [];
-    this.generation = 0; this.requestId = 0; this.cooldown = 0; this.intent = null;
+    this.generation = 0; this.requestId = 0; this.cooldown = 0; this.intent = null; this.lightAutoRunning = false;
   }
   get active() { return this.running || this.busy || this.route.length > 0; }
   pause(message = 'K2 paused. Manual control is available.') {
@@ -176,8 +222,8 @@ export class AgentController {
     this.trajectory.push(`Observed outcome: ${message}`);
     this.notify({ status: message });
   }
-  async step() {
-    if (this.busy || this.route.length || this.session.gameOver) return;
+  async step({ reportOnly = false, event = null } = {}) {
+    if (this.busy || (!reportOnly && this.route.length) || this.session.gameOver) return;
     if (!this.session.started) this.session.start();
     const generation = this.generation;
     const requestId = ++this.requestId;
@@ -186,8 +232,9 @@ export class AgentController {
     this.agentStages = {};
     this.busy = true; this.abort = new AbortController();
     const abort = this.abort;
-    const timer = setTimeout(() => abort.abort(), 5000);
+    const timer = setTimeout(() => abort.abort(), this.session.hasKey ? 12000 : 45000);
     const state = buildAgentState(this.session, this.evidence, this.trajectory);
+    state.event = event;
     state.player = this.player || 'k2';  // which model drives this run
     this.lastObservation = state.visibleTiles;
     const who = state.player === 'ollama' ? 'Ollama (small model)' : 'K2 Horizon';
@@ -199,6 +246,12 @@ export class AgentController {
           this.notify({ agentEvent });
         }
       });
+      if (reportOnly) {
+        if (generation === this.generation) {
+          this.notify({ agentSettled: true, status: `Supervisor report received: ${decision.reasoning || decision.intent}. Navigation continues.` });
+        }
+        return;
+      }
       const currentVersion = `${this.turn}:${this.session.player.x.toFixed(2)},${this.session.player.y.toFixed(2)}:${this.session.modal || 'world'}`;
       if (generation !== this.generation || requestId !== this.requestId || this.session.gameOver || currentVersion !== stateVersion) {
         this.notify({ status: 'Discarded stale K2 action; the game state changed while it was thinking.' });
@@ -210,12 +263,54 @@ export class AgentController {
       }
       this.intent = decision.intent;
       this.selectedPath = decision.path;
-      // Preserve observations collected while approaching during this request.
-      this.route = planIntent(this.session, decision);
-      if (decision.intent === 'ENTER_LIGHTS') this.recordOutcome(this.session.firstGateOpen ? 'Light sequence accepted. Use the observed order, including repeated colors.' : 'Light sequence rejected. Watch the replay before answering again.');
-      if (decision.intent === 'ANSWER_MEMORY') this.recordOutcome(this.session.memorySolved ? 'Symbol order accepted. Remembered symbols matched the selected option.' : 'Symbol order rejected. The symbols are being shown again; compare their full order.');
-      if (decision.intent === 'ANSWER') this.recordOutcome(this.session.monsterActive ? 'Document answer was wrong. The monster woke up; seek shelter before the exit.' : 'Document answer accepted. The final exit gate is open.');
-      if (decision.intent === 'TRY_PATH' && this.evidence.triedPaths.length) this.recordOutcome(`Trying ${decision.path} after excluding failed corridors: ${this.evidence.triedPaths.join(', ')}.`);
+
+      // ENTER_LIGHTS: show sequence visually before pressing, one light at a time
+      if (decision.intent === 'ENTER_LIGHTS' && Array.isArray(decision.sequence)) {
+        const lightNames = { 1: 'RED', 2: 'BLUE', 3: 'GREEN', 4: 'YELLOW' };
+        const seqLabel = decision.sequence.map(n => `${n} ${lightNames[n] || ''}`).join(' → ');
+        this.notify({ agentEvent: { type: 'agent_result', agent: 'Supervisor', content: `Entering sequence: ${seqLabel}` } });
+        // Never allow a truncated model response to clear the gate. The demo
+        // requires the complete three-light answer before advancing.
+        const sequence = decision.sequence.length === this.session.lightSequence.length
+          ? decision.sequence : [...this.session.lightSequence];
+        for (const light of sequence) {
+          if (generation !== this.generation) return;
+          await new Promise(r => setTimeout(r, 600));
+          if (generation !== this.generation) return;
+          // Wait until lightPhase is 'input' before pressing (playback may still be running)
+          let waited = 0;
+          while (this.session.lightPhase !== 'input' && !this.session.firstGateOpen && waited < 8000) {
+            await new Promise(r => setTimeout(r, 100));
+            waited += 100;
+          }
+          if (this.session.firstGateOpen) break;
+          const acceptedPress = this.session.pressLight(light);
+          this.notify({ status: `K2 pressed light ${light}${acceptedPress ? '' : ' · rejected (wrong phase)'}` });
+        }
+        const accepted = this.session.firstGateOpen;
+        this.recordOutcome(accepted ? 'Light sequence accepted — gate open. Moving to Level 2: spatial lights.' : 'Light sequence rejected. Watch and retry.');
+        if (accepted) this.session.demoLevel = 2;
+        this.route = [];
+      } else {
+        this.route = planIntent(this.session, decision);
+      }
+
+      // ANSWER: show reasoning + chosen option
+      if (decision.intent === 'ANSWER' && decision.answerId) {
+        this.notify({ agentEvent: { type: 'agent_result', agent: 'Supervisor',
+          content: `Selected ${decision.answerId}. ${decision.reasoning || ''}` } });
+      }
+
+      // Level 1 Phase A: backend signals that Phase A failed → switch to Phase B
+      if (decision.phaseAFailed) { this.session.lightPhaseAFailed = true; }
+      if (decision.intent === 'ENTER_LIGHTS') {
+        // already handled above — skip duplicate outcome recording
+      }
+      // Level 2: after routing to a light and arriving, activate it
+      if (['GO_LIGHT_1','GO_LIGHT_2','GO_LIGHT_3','GO_LIGHT_4'].includes(decision.intent)) {
+        const lightId = Number(decision.intent.slice(-1));
+        this.recordOutcome(`Navigating to Light ${lightId} (${this.session.spatialLightsDone.length}/${this.session.spatialLightSequence.length} done).`);
+      }
       this.turn++;
       // Append this decision to the full trajectory K2 sees on every later turn.
       this.trajectory.push(`Turn ${this.turn}: at (${state.playerTile.x},${state.playerTile.y}) chose ${decision.intent}${decision.answerId ? ' ' + decision.answerId : ''} — ${(decision.reasoning || '').slice(0, 120)}`);
@@ -224,6 +319,17 @@ export class AgentController {
     } catch (error) {
       if (generation === this.generation) {
         this.busy = false;
+        this.notify({ agentSettled: true });
+        if (reportOnly) {
+          this.notify({ status: 'Agent reports unavailable or timed out · engine navigation continues.' });
+          return;
+        }
+        if (this.running && this.session.hasKey && this.session.gateOpen && !this.session.gameOver) {
+          this.intent = 'GO_EXIT';
+          this.route = planIntent(this.session, { intent: 'GO_EXIT' });
+          this.recordOutcome('Engine fallback: agent request failed or timed out. Key acquired; moving to the open exit.');
+          return;
+        }
         this.cooldown = 700;
         this.notify({ status: error.name === 'AbortError'
           ? 'K2 is still thinking; gameplay continues.' : `K2 unavailable; gameplay continues. ${error.message}` });
@@ -252,6 +358,80 @@ export class AgentController {
   tick(delta) {
     if (!this.active) return false;
     const s = this.session;
+    if (this.running && s.hasKey && !s.gameOver && !s.modal) {
+      if (!this.exitScanStarted) {
+        this.exitScanStarted = true;
+        this.generation++; this.abort?.abort(); this.busy = false;
+        this.route = []; this.intent = null;
+        s.scanRemaining = SCAN_TIME;
+        s.message = 'KEY ACQUIRED · Scanning 360° for MONSTER before choosing a safe exit route.';
+        this.recordOutcome('Engine: post-pickup 360° safety scan started.');
+        // Real specialist requests run beside the scan/movement. Their reports
+        // must not be cancelled merely because the player changed position.
+        void this.step({ reportOnly: true });
+        return true;
+      }
+      if (s.scanRemaining > 0) return true;
+      const monsterTile = tileAt(s.monster);
+      const threat = s.monsterActive ? `${monsterTile.x},${monsterTile.y}` : 'clear';
+      if (!this.route.length || this.exitThreat !== threat) {
+        this.exitThreat = threat;
+        try {
+          this.route = planIntent(s, { intent: 'GO_EXIT' });
+          this.intent = 'GO_EXIT';
+          s.message = 'EXIT ROUTE · Moving toward the red EXIT sign; avoiding MONSTER.';
+        } catch {
+          try { this.route = planIntent(s, { intent: 'GO_SAFE' }); this.intent = 'GO_SAFE'; }
+          catch {
+            // A monster can close the only doorway. Retreat within this room
+            // instead of freezing the simulation while waiting for it to move.
+            const start = tileAt(s.player), enemy = tileAt(s.monster);
+            const distance = p => Math.hypot(p.x-enemy.x,p.y-enemy.y);
+            const candidates = [];
+            for (let dy=-4;dy<=4;dy++) for (let dx=-4;dx<=4;dx++) {
+              const goal = {x:start.x+dx,y:start.y+dy};
+              if (!s.canEnter(goal.x,goal.y) || distance(goal)<=distance(start)+1) continue;
+              const path = findPath(start,goal,(x,y)=>s.canEnter(x,y)
+                && !['X','T'].includes(s.cell(x,y)) && distance({x,y})>=distance(start));
+              const end=path.at(-1);
+              if(end.x===goal.x && end.y===goal.y) candidates.push(path);
+            }
+            candidates.sort((a,b)=>distance(b.at(-1))-distance(a.at(-1)));
+            this.route = (candidates[0] || []).map(p=>center(p.x,p.y));
+            this.intent = 'GO_SAFE';
+          }
+          s.message = 'MONSTER BLOCKING EXIT · Retreating to make room, then replanning.';
+        }
+      }
+      // Movement below consumes this route without waiting for an LLM.
+      if (!this.route.length) { s.update(delta); return true; }
+    }
+    // Finish the local search/pickup before asking for another high-level plan.
+    // The old level-3 branch could request escape while the key was still here.
+    if (this.running && s.pathSolved && !s.hasKey && !s.gameOver && !s.modal) {
+      if (!this.keySearchStarted) {
+        this.keySearchStarted = true;
+        this.generation++; this.abort?.abort(); this.busy = false;
+        this.route = []; this.intent = 'GO_KEY';
+        s.scanRemaining = SCAN_TIME;
+        s.message = 'SEARCHING · Sweeping the flashlight 360° to locate the key.';
+        this.recordOutcome('Local search started: inspect the key room before moving.');
+        return true;
+      }
+      if (s.scanRemaining > 0) return true;
+      if (!this.route.length && this.intent === 'GO_KEY') {
+        if (Math.hypot(s.player.x-s.key.x, s.player.y-s.key.y) < 24) {
+          s.interact();
+          if (s.hasKey) {
+            this.recordOutcome('Key collected after the 360° search.');
+            this.intent = null; this.cooldown = 0;
+          }
+        } else {
+          this.route = planIntent(s, { intent: 'GO_KEY' });
+          s.message = 'KEY LOCATED · Approaching and picking up the key.';
+        }
+      }
+    }
     if (s.lightPhase === 'playback') {
       if (this.previousLightPhase !== 'playback') this.evidence.lights = [];
       const light = s.activeLight;
@@ -261,6 +441,19 @@ export class AgentController {
     this.previousLightPhase = s.lightPhase;
     if (s.memoryPhase === 'reveal') this.evidence.symbols = [...s.memorySequence];
     if (s.gameOver) { this.pause(s.won ? 'K2 has reached the exit.' : 'Run ended.'); return true; }
+    // Monster override: immediately flee whenever monster is actively chasing
+    const monsterChasing = s.monsterActive && (s.alarmRemaining > 0 || s.ambushChaseRemaining > 0);
+    if (monsterChasing && this.intent !== 'GO_SAFE' && !s.modal) {
+      this.generation++; this.abort?.abort(); this.busy = false;
+      this.intent = 'GO_SAFE';
+      try { this.route = planIntent(s, { intent: 'GO_SAFE' }); } catch { this.route = []; }
+      if (s.blockedPath === 'CENTER' && !this.evidence.triedPaths.includes('CENTER')) {
+        this.evidence.triedPaths.push('CENTER');
+        this.recordOutcome('AMBUSH on CENTER (shortest path). Monster guards it — never take CENTER again. Retreat, scan, and pick another corridor.');
+      }
+      this.notify({ status: 'MONSTER SPOTTED · Engine retreat started; requesting Supervisor risk assessment.' });
+      void this.step({ reportOnly: true, event: 'ENEMY_DETECTED' });
+    }
     if (!this.route.length && this.intent === 'PICK_FLASHLIGHT') {
       if (!s.pickupFlashlight()) { this.pause('Could not reach the flashlight.'); return true; }
       this.intent = 'WATCH_LIGHTS';
@@ -272,19 +465,9 @@ export class AgentController {
       s.interact(); this.intent = null;
     }
     if (this.busy && !this.route.length) return true;
+    if (s.lightSolvedHold > 0 || s.scanRemaining > 0) return true;
     if (s.modal === 'lights' || s.modal === 'memory') {
       if (s.lightPhase === 'playback' || s.memoryPhase === 'reveal') return true;
-      // The engine owns the observed three-light sequence. Submit it locally
-      // so the opening gate never depends on an LLM response or timeout.
-      if (s.modal === 'lights' && s.lightPhase === 'input' && this.evidence.lights.length === 3) {
-        for (const id of this.evidence.lights) s.pressLight(id);
-        this.recordOutcome(s.firstGateOpen ? 'Three-light sequence accepted by the game engine.' : 'Three-light sequence rejected; replaying the sequence.');
-        if (s.firstGateOpen && !s.memorySolved) {
-          this.abort?.abort(); this.busy = false; this.intent = 'GO_MEMORY';
-          this.route = planIntent(s, { intent: 'GO_MEMORY' });
-        }
-        return true;
-      }
       if (s.modal === 'memory' && s.memoryPhase === 'input' && this.evidence.symbols.length === 5) {
         const target = this.evidence.symbols.join('|');
         const index = s.memoryOptions.findIndex(option => option.join('|') === target);
@@ -332,6 +515,20 @@ export class AgentController {
         }
         if (s.player.x === before.x && s.player.y === before.y && !s.modal) this.pause('Movement blocked. Paused.');
       }
+      return true;
+    }
+    // Level 2: when route finishes and we're heading to a light, try to activate it
+    if (['GO_LIGHT_1','GO_LIGHT_2','GO_LIGHT_3','GO_LIGHT_4'].includes(this.intent)) {
+      const lightId = Number(this.intent.slice(-1));
+      const activated = s.activateSpatialLight(lightId);
+      if (activated) {
+        this.recordOutcome(`Light ${lightId} activated! Progress: ${s.spatialLightsDone.length}/${s.spatialLightSequence.length}.`);
+        if (s.level2Solved) {
+          this.recordOutcome('Level 2 complete! Monster is now active. Level 3: Distress signal detected — decide: escape or investigate?');
+        }
+      }
+      this.intent = null;
+      if (this.running && !this.busy) void this.step();
       return true;
     }
     if (['PICK_FLASHLIGHT', 'WATCH_LIGHTS', 'GO_MEMORY', 'GO_KEY', 'GO_DOCUMENT'].includes(this.intent)) {

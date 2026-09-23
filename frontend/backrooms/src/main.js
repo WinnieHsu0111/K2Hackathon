@@ -17,6 +17,10 @@ class GameUI {
   constructor() {
     this.dialog = byId('interaction');
     this.currentModal = null;
+    this.lastMessage = '';
+    this.lastGateOpen = false;
+    this.lastPathSolved = false;
+    this.resultTimer = null;
     byId('lock-form').onsubmit = (event) => {
       event.preventDefault(); if (this.isAutonomous?.()) return;
       if (this.session.unlock(byId('door-code').value)) this.close();
@@ -61,12 +65,33 @@ class GameUI {
   }
   sync() {
     const s = this.session;
+    const result = byId('stage-result');
+    const showResult = (html, failed = false, duration = 1800) => {
+      if (!result) return;
+      result.innerHTML = html;
+      result.classList.toggle('fail', failed);
+      result.classList.add('show');
+      clearTimeout(this.resultTimer);
+      this.resultTimer = setTimeout(() => result.classList.remove('show'), duration);
+    };
+    if (s.message !== this.lastMessage) {
+      if (/AMBUSH|FALSE PATH|caught|monster was released/i.test(s.message)) {
+        showResult('FAIL<br><small>CAUGHT BY THE MONSTER · RETURNING TO START</small>', true, 2400);
+      } else if (/Path verified|Light puzzle solved|Door A is open/i.test(s.message)) {
+        showResult('CORRECT<br><small>ONTO THE NEXT STAGE</small>');
+      }
+      this.lastMessage = s.message;
+    }
+    if (!this.lastGateOpen && s.firstGateOpen) showResult('CORRECT<br><small>ONTO THE NEXT STAGE</small>');
+    if (!this.lastPathSolved && s.pathSolved) showResult('CORRECT<br><small>ROUTE REMEMBERED · ONTO THE NEXT STAGE</small>');
+    this.lastGateOpen = s.firstGateOpen;
+    this.lastPathSolved = s.pathSolved;
     updateText(byId('status'), s.message);
     const time = `${(s.timeLeft / 1000).toFixed(1)}s`;
     updateText(byId('timer'), time);
     byId('timer').dataset.urgent = String(s.timeLeft <= 15000);
     byId('start-screen').hidden = true;
-    updateText(byId('inventory'), !s.firstGateOpen ? `LIGHT CODE ${s.lightInput.length}/5`
+    updateText(byId('inventory'), !s.firstGateOpen ? `LIGHT CODE ${s.lightInput.length}/3`
       : !s.memorySolved ? 'MEMORY ROOM' : !s.pathSolved ? 'CHOOSE A PATH' : s.hasKey ? `KEY ✓ / CODE ${s.doorCode}` : 'FIND THE KEY');
     let threat = 'No threats detected';
     if (s.dead) threat = 'YOU DIED';
@@ -78,7 +103,7 @@ class GameUI {
     if (s.modal && this.currentModal !== s.modal) {
       this.currentModal = s.modal;
       for (const name of ['lock', 'light', 'document', 'memory']) byId(`${name}-panel`).hidden = s.modal !== (name === 'light' ? 'lights' : name);
-      const titles = { lights: 'Remember five lights', lock: 'Enter the code', document: 'CALCULUS FILE', memory: 'Remember five symbols' };
+      const titles = { lights: 'Remember three lights', lock: 'Enter the code', document: 'CALCULUS FILE', memory: 'Remember five symbols' };
       byId('dialog-title').textContent = titles[s.modal];
       byId('dialog-label').textContent = 'FIELD INTERACTION';
       byId('lock-error').textContent = ''; byId('door-code').value = '';
@@ -91,9 +116,15 @@ class GameUI {
     }
     if (s.modal === 'lights') {
       updateText(byId('light-playback-status'), s.lightNotice);
-      updateText(byId('light-current'), s.lightPhase === 'input' ? `INPUT ${s.lightInput.length}/3` : s.activeLight ? `${s.activeLight} · ${LIGHTS[s.activeLight]}` : '—');
+      const observed = s.lightSequence.slice(0, s.lightsShown).map((id) => LIGHTS[id]);
+      updateText(byId('light-current'), observed.length ? observed.join(' → ') : '—');
+      const slots = [0, 1, 2].map((i) => `${'①②③'[i]} ${s.lightInput[i] ? LIGHTS[s.lightInput[i]] : '___'}`);
+      updateText(byId('light-answer-slots'), `${slots.join('   ')}   ·   ${s.lightInput.length}/3`);
       for (const light of document.querySelectorAll('[data-light]')) light.classList.toggle('lit', Number(light.dataset.light) === s.activeLight);
-      for (const button of byId('light-input').children) button.disabled = s.lightPhase !== 'input';
+      [...byId('light-input').children].forEach((button, i) => {
+        button.disabled = s.lightPhase !== 'input';
+        button.classList.toggle('pressed', s.lightFlashRemaining > 0 && s.pressedLight === i + 1);
+      });
       byId('replay-lights').disabled = s.lightPhase === 'playback';
     }
     const revealing = s.memoryPhase === 'reveal';
@@ -129,6 +160,14 @@ class Backrooms extends Phaser.Scene {
     this.lightButtons = {};
     ui.bind(this.session, this.input.keyboard);
     this.agentPanel = createAgentPanel(this.session, () => this.scene.restart({ autoStart: true }), Boolean(data.autoStart));
+    if (data.retryMemory) {
+      const controller = this.agentPanel.controller;
+      controller.evidence.triedPaths = [...data.retryMemory.triedPaths];
+      controller.evidence.outcomes = [...data.retryMemory.outcomes];
+      controller.trajectory = [...data.retryMemory.trajectory];
+      this.session.blockedPath = data.retryMemory.blockedPath;
+      this.session.pathAmbushTriggered = Boolean(data.retryMemory.blockedPath);
+    }
     createComparePanel(byId('backend-url').value || 'http://127.0.0.1:8000');
     this.minimap = createMinimap();
     this.mission = createMission();
@@ -350,10 +389,15 @@ class Backrooms extends Phaser.Scene {
     const agent = this.agentPanel.controller;
     if (this.session.paused) { this.renderState(); return; }
     if (this.session.dead) {
-      if (agent.active) agent.pause('Run ended. Press Start K2 to retry.');
+      if (agent.active) agent.pause('FAIL · Returning to start for a fresh 180-second attempt. Route memory retained.');
       this.deathShownAt ??= now;
       this.renderState();
-
+      if (now - this.deathShownAt >= 2200) {
+        this.scene.restart({ autoStart: true, retryMemory: {
+          triedPaths: agent.evidence.triedPaths, outcomes: [...agent.evidence.outcomes, 'Caught by MONSTER. New 180-second attempt; avoid previously failed corridors.'],
+          trajectory: agent.trajectory, blockedPath: this.session.blockedPath,
+        } });
+      }
       return;
     }
     if (!this.session.started) { this.renderState(); return; }

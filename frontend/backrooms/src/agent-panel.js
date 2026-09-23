@@ -12,6 +12,53 @@ export function createAgentPanel(session, restart, autoStart = false) {
   const pipeline = createHub();
   const log = el('agent-log');
   const bubbles = el('agent-bubbles');
+  const missionLog = el('mission-agent-log');
+  const llmThinking = el('llm-thinking');
+  const llmAnswer = el('llm-answer');
+
+  const updateLLMTrace = (text, isThinking) => {
+    const clean = String(text).replace(/\s+/g, ' ').trim().slice(0, 220);
+    if (isThinking) { if (llmThinking) llmThinking.textContent = clean; }
+    else { if (llmAnswer) llmAnswer.textContent = clean; }
+  };
+
+  const lightNames = { 1: 'RED', 2: 'BLUE', 3: 'GREEN', 4: 'YELLOW' };
+  const lightColors = { 1: '#e05555', 2: '#5588e0', 3: '#55c074', 4: '#d4b84a' };
+
+  const addMissionBubble = (agent, text, isThinking) => {
+    // Left panel: only show agent_result (final answers), not thinking noise
+    if (!missionLog || !text || isThinking) return;
+    const div = document.createElement('div');
+    div.className = `mal-bubble mal-${agent.toLowerCase()}`;
+    const label = document.createElement('strong');
+    label.textContent = agent.toUpperCase();
+    div.append(label);
+
+    // Detect light sequences like "1 → 3 → 2" or [1,3,2] and render as colored pills
+    const seqMatch = String(text).match(/\b([1-4])\s*[→\->]+\s*([1-4])\s*[→\->]+\s*([1-4])/);
+    if (seqMatch) {
+      const pills = document.createElement('div');
+      pills.className = 'mal-light-seq';
+      for (let i = 1; i <= 3; i++) {
+        const n = parseInt(seqMatch[i]);
+        const pill = document.createElement('span');
+        pill.className = 'mal-light-pill';
+        pill.style.background = lightColors[n] || '#666';
+        pill.textContent = lightNames[n] || n;
+        pills.append(pill);
+        if (i < 3) { const arr = document.createElement('span'); arr.textContent = '→'; arr.className = 'mal-arrow'; pills.append(arr); }
+      }
+      div.append(pills);
+    } else {
+      const span = document.createElement('span');
+      span.textContent = String(text).replace(/\s+/g, ' ').trim().slice(0, 140);
+      div.append(span);
+    }
+
+    missionLog.appendChild(div);
+    while (missionLog.children.length > 5) missionLog.firstElementChild.remove();
+    missionLog.scrollTop = missionLog.scrollHeight;
+  };
   log?.replaceChildren();
   const roles = { Supervisor: 'Coordinator', Explorer: 'Environment', Survival: 'Risk assessment', Navigator: 'Next action' };
   const addCard = (agent, title, body, kind) => {
@@ -47,21 +94,29 @@ export function createAgentPanel(session, restart, autoStart = false) {
     while (bubbles.children.length > 8) bubbles.firstElementChild.remove();
     bubbles.scrollTop = bubbles.scrollHeight;
   };
-  const notify = ({ status, entry, agentEvent }) => {
+  const notify = ({ status, entry, agentEvent, agentSettled }) => {
     const statusEl = el('agent-status');
     if (status !== undefined && statusEl) statusEl.textContent = status;
+    if (agentSettled) pipeline.onIdle();
     // A new decision turn is starting — reset the pipeline and light "Observe".
-    if (status && /deciding the next move/i.test(status)) pipeline.onObserve();
+    if (status && /deciding the next move/i.test(status)) {
+      pipeline.onObserve();
+      if (missionLog) missionLog.replaceChildren();
+      if (llmThinking) llmThinking.textContent = '';
+      if (llmAnswer) llmAnswer.textContent = '';
+    }
     if (agentEvent) {
       pipeline.onEvent(agentEvent);
       const done = agentEvent.type === 'agent_result';
-      addCard(agentEvent.agent, done ? 'Report' : 'Working',
-        done ? agentEvent.content : agentEvent.message, done ? 'report' : 'working');
+      const text = done ? agentEvent.content : agentEvent.message;
+      addCard(agentEvent.agent, done ? 'Report' : 'Working', text, done ? 'report' : 'working');
       if (done) addBubble(agentEvent.agent, agentEvent.content, agentEvent.agent === 'Supervisor' ? 'decision' : 'report');
+      addMissionBubble(agentEvent.agent, text, !done);
+      updateLLMTrace(text, !done);
     }
     if (entry) {
-      pipeline.onDecision(entry.intent, entry.reason);
-      addCard('Supervisor', `Turn ${entry.turn}: ${entry.intent}${entry.answerId ? ` (${entry.answerId})` : ''}`, entry.reason, 'decision');
+      pipeline.onDecision(entry.intent, entry.reasoning);
+      addCard('Supervisor', `Turn ${entry.turn}: ${entry.intent}${entry.answerId ? ` (${entry.answerId})` : ''}`, entry.reasoning, 'decision');
     }
     if (entry && controller.route.length) {
       const points = [entry.state.playerTile, ...controller.route.map(tileAt)];

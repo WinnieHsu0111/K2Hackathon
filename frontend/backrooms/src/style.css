@@ -33,11 +33,17 @@ header { grid-area: header; display: flex; align-items: center; gap: 24px; }
 .agent-node[data-state='active'] { border-color: #e2d583; background: #393720; box-shadow: inset 0 0 25px #cfbd3910,0 0 14px #cece4f10; }
 .agent-node[data-state='active'] .agent-led { background: #fff4a6; border-color: #fff5b8; box-shadow: 0 0 8px #ffee87,0 0 22px #f6d84b; }
 .agent-node[data-state='active'] strong,.agent-node[data-state='active'] .agent-state { color: #fff1a5; }
-.agent-node[data-state='done'] .agent-led { background: #547e58; border-color: #789775; }
-.agent-node[data-state='done'] .agent-state { color: #99b18b; }
+.agent-node[data-state='done'] { border-color: #91db99; background: #263e2a; box-shadow: 0 0 14px #82e89b35; }
+.agent-node[data-state='done'] .agent-led { background: #bdffbe; border-color: #ddffdb; box-shadow: 0 0 10px #8cff98, 0 0 22px #8cff9870; }
+.agent-node[data-state='done'] .agent-state, .agent-node[data-state='done'] strong { color: #c2ffca; }
+.agent-chip[data-state='done'] { background: #263e2a; color: #c2ffca; box-shadow: 0 0 12px #82e89b55; }
+.agent-node[data-state='waiting'] { border-color: #eadb82; background: #393720; }
 #hub-caption { min-height: 1.5em; margin: 7px 0 0; font-size: 10px; color: #949f85; }
 #stage-wrap { grid-area: game; position: relative; min-width: 0; min-height: 0; height: 94%; align-self: center; overflow: hidden; border: 1px solid #55573d; border-radius: 7px; background: #242719; }
 #scene3d { position: absolute; inset: 0; }
+#stage-result { position: absolute; z-index: 5; left: 50%; top: 48%; transform: translate(-50%,-50%) scale(.94); min-width: 280px; padding: 18px 24px; text-align: center; border: 2px solid #e6d780; background: #12180fd9; color: #f2e9b1; font: 700 15px/1.4 monospace; letter-spacing: .12em; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; }
+#stage-result.show { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+#stage-result.fail { border-color: #d47767; color: #ffb09c; }
 #scene3d canvas { width: 100%; height: 100%; display: block; }
 #game { width: 100%; aspect-ratio: 5/3; }
 .has-3d #game { position: absolute; width: 960px; height: 576px; opacity: 0; pointer-events: none; z-index: -1; }
@@ -53,13 +59,37 @@ header { grid-area: header; display: flex; align-items: center; gap: 24px; }
 .rail { grid-area: rail; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; min-height: 0; scrollbar-width: thin; scrollbar-color: #505c42 transparent; padding-right: 3px; }
 .rail > * { flex-shrink: 0; }
 .rail section { border: 1px solid #333d2c; background: #191f16; border-radius: 7px; padding: 16px; }
+.mission-panel h2 { margin: 12px 0 4px; font: 25px/1.15 Georgia,serif; color: #e7e7cf; font-weight: normal; }
 .mission-panel h1 { margin: 12px 0 8px; font: 25px/1.15 Georgia,serif; color: #e7e7cf; }
 #mission-hint { min-height: 3.2em; margin: 0 0 12px; }
+.level-badge { display: inline-block; font-size: 8px; letter-spacing: .18em; color: #e6dd9a; background: #2d2e18; border: 1px solid #9b9558; border-radius: 3px; padding: 3px 8px; margin-bottom: 8px; }
+#level-subtitle { font: 500 18px/1.2 Georgia,serif; color: #e9e8d0; margin: 4px 0 4px; }
+.level-tagline { font-size: 10px; color: #a0aa8a; margin: 0 0 10px; letter-spacing: .04em; }
+.agent-chain { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; padding: 8px 10px; background: #171c14; border: 1px solid #2e3828; border-radius: 5px; }
+.mission-agent-log { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; max-height: 220px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #3a4530 transparent; }
+.mission-agent-log:empty { display: none; }
+.mal-bubble { font-size: 10px; line-height: 1.4; padding: 6px 9px; border-radius: 4px 10px 10px 10px; border: 1px solid #2e3828; background: #181e15; color: #b8c4a8; }
+.mal-bubble strong { display: block; font-size: 8px; letter-spacing: .1em; margin-bottom: 2px; color: #7a9068; }
+.mal-bubble.mal-supervisor { align-self: flex-end; border-radius: 10px 4px 10px 10px; background: #2a2d18; border-color: #9b9558; color: #ede4b0; }
+.mal-bubble.mal-supervisor strong { color: #c8bc6a; }
+.mal-bubble.mal-explorer strong { color: #7db870; }
+.mal-bubble.mal-survival strong { color: #c9855a; }
+.mal-bubble.mal-navigator strong { color: #7aa8c8; }
+.mal-bubble.mal-thinking { opacity: 0.65; font-style: italic; border-style: dashed; }
+.mal-light-seq { display: flex; align-items: center; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+.mal-light-pill { font-size: 9px; font-weight: 700; letter-spacing: .08em; padding: 2px 7px; border-radius: 10px; color: #000; }
+.mal-arrow { font-size: 9px; color: #6a7560; }
+.agent-chip { font-size: 9px; letter-spacing: .1em; padding: 3px 8px; border-radius: 3px; font-weight: 600; }
+.agent-chip.agent-supervisor { background: #2d2e18; color: #e6dd9a; border: 1px solid #9b9558; }
+.agent-chip.agent-explorer { background: #1a2418; color: #9cd98f; border: 1px solid #4a7d42; }
+.agent-chip.agent-survival { background: #271e17; color: #e0a07a; border: 1px solid #7d5040; }
+.agent-chip.agent-navigator { background: #181f27; color: #90b8d6; border: 1px solid #406080; }
+.chain-arrow { color: #5a6b50; font-size: 11px; }
 #mission-inventory { color: #b2ba85; font-size: 9px; padding-top: 10px; border-top: 1px solid #343d2c; letter-spacing: .06em; }
-#stage-progress { list-style: none; display: grid; grid-template-columns: repeat(7,1fr); gap: 4px; padding: 0; margin: 14px 0 0; }
+#stage-progress { list-style: none; display: grid; grid-template-columns: repeat(3,1fr); gap: 6px; padding: 0; margin: 14px 0 0; }
 #stage-progress li { text-align: center; color: #627055; border-top: 2px solid #343f2a; padding-top: 8px; }
 #stage-progress span { display: block; font-size: 11px; }
-#stage-progress b { display: block; font-size: 7px; font-weight: normal; margin-top: 5px; }
+#stage-progress b { display: block; font-size: 9px; font-weight: normal; margin-top: 5px; }
 #stage-progress [data-state='active'] { color: #f0df94; border-color: #e4ce7c; }
 #stage-progress [data-state='done'] { color: #a0bd8c; border-color: #839c66; }
 #agent-status { margin: 0; font-size: 11px; color: #b1b99f; padding: 0 5px; overflow-wrap: anywhere; }
@@ -74,6 +104,7 @@ header { grid-area: header; display: flex; align-items: center; gap: 24px; }
 .bubble-navigator strong { color: #aec4d4; }
 .bubble-supervisor { align-self: flex-end; border-color: #d2c875; border-radius: 12px 4px 12px 12px; background: #393821; color: #f0e7ad; }
 .bubble-supervisor strong { color: #f5df78; }
+.bubble-thinking { opacity: 0.6; border-style: dashed; font-style: italic; }
 .map-panel h2 { display: flex; justify-content: space-between; }
 .map-panel h2 span { color: #64785c; }
 .map-box { display: flex; justify-content: center; height: 225px; margin-top: 12px; background: #11170f; border: 1px solid #303a28; overflow: hidden; }
@@ -103,6 +134,10 @@ dialog section { padding: 0 !important; border: 0 !important; background: transp
 #memory-preview { font-size: 25px; text-align: center; color: #e5edc7; }
 .rule { border-left: 2px solid #b9be8d; padding: 8px 12px; background: #ffffff06; }
 #question-prompt { font-size: 16px; color: #f5efd2; }
+
+/* Question/puzzle section eyebrow labels */
+.panel-eyebrow { font-size: 8px; letter-spacing: .18em; color: #7a8a66; margin: 10px 0 4px; font-weight: 600; }
+.panel-question { font-size: 15px; color: #f0ebd0; margin: 2px 0 10px; }
 label { display: block; margin: 12px 0 8px; font-size: 12px; }
 input { width: 100%; padding: 10px; background: #141b12; color: #efe4ad; border: 1px solid #78865e; font-size: 23px; letter-spacing: .2em; }
 #lock-error { color: #e8957e; }
@@ -129,7 +164,7 @@ body.demo-mode main { grid-template-columns: 360px minmax(0,1fr) 340px; grid-tem
 .question-rail { grid-area: questions; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding-left: 12px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #505c42 transparent; }
 .question-rail > * { flex-shrink: 0; }
 .question-rail > section { border: 1px solid #333d2c; background: #191f16; border-radius: 7px; padding: 15px; }
-.question-rail #stage-progress { grid-template-columns: repeat(4,1fr); row-gap: 12px; }
+.question-rail #stage-progress { grid-template-columns: repeat(3,1fr); row-gap: 12px; }
 .question-rail .mission-panel h1 { font-size: 25px; }
 .rail .hub-panel { padding: 13px; }
 .rail #hub { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; }
@@ -141,14 +176,45 @@ body.demo-mode main { grid-template-columns: 360px minmax(0,1fr) 340px; grid-tem
 .rail .agent-calls { margin-left: auto; font-size: 8px; }
 .log-title { padding-top: 14px; margin-top: 12px; border-top: 1px solid #343d2c; }
 .rail #agent-log { max-height: 240px; }
+/* Right rail: hide working/report cards, only show decisions */
+.rail .workflow-card.working,
+.rail .workflow-card.report { display: none; }
+.rail .workflow-card.decision { border-left: 3px solid #c2d18d; background: #1e2318; }
+.rail .workflow-card.decision strong { color: #d4dc9a; font-size: 9px; }
+.rail .workflow-card.decision div { font-size: 10px; color: #b0bb90; margin-top: 4px; }
 .rail #agent-status { margin-top: 8px; }
 .map-box { height: 235px; }
 #memory-feed { padding-left: 16px; font-size: 11px; line-height: 1.65; color: #c3cca9; }
 #memory-feed li { margin-bottom: 9px; }
 #memory-feed:empty::after { content: 'Failures and corrections will appear here.'; color: #738265; }
 #memory-summary { font-size: 10px; color: #d3ce92; }
-body.demo-mode dialog#interaction { padding: 15px; }
+body.demo-mode dialog#interaction { padding: 12px; }
 #dialog-agent-status { font-size: 9px; }
+/* Hide dialog chrome — keep only puzzle content */
+body.demo-mode #dialog-label,
+body.demo-mode dialog#interaction h1,
+body.demo-mode #dialog-agent-status,
+body.demo-mode #close-dialog,
+body.demo-mode #replay-lights { display: none; }
+/* QUESTION label at top of dialog */
+.puzzle-question-label { font-size: 9px; letter-spacing: .2em; color: #c8bc6a; font-weight: 700; margin: 0 0 6px; }
+/* LLM trace block in mission panel */
+.llm-trace { margin-bottom: 10px; }
+.llm-trace-label { font-size: 8px; letter-spacing: .18em; color: #7a8a66; font-weight: 600; margin: 8px 0 3px; }
+.llm-thinking { font-size: 10px; line-height: 1.5; color: #8fa07a; font-style: italic; min-height: 1em; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 80px; overflow-y: auto; }
+.llm-thinking:empty::after { content: '—'; color: #4a5a40; }
+.llm-answer { font-size: 11px; line-height: 1.5; color: #e0d897; font-weight: 600; min-height: 1em; }
+.llm-answer:empty::after { content: '—'; color: #4a5a40; }
+/* Compact puzzle panels */
+#light-panel .light-preview { margin: 8px 0 6px; }
+#light-panel .light-preview [data-light] { padding: 7px 0; }
+#light-panel .light-preview strong { font-size: 16px; }
+#light-current { font-size: 13px; text-align: left; margin: 2px 0 6px; }
+.light-input { margin: 6px 0 8px; }
+#document-panel #question-prompt { font-size: 14px; margin: 4px 0 8px; }
+#document-panel .rule { padding: 6px 10px; margin-bottom: 6px; font-size: 10px; }
+.answers { margin: 6px 0; gap: 6px; }
+.answers button { padding: 8px 12px; font-size: 11px; }
 #interaction-prompt { position: absolute; z-index: 3; left: 50%; bottom: 25%; transform: translateX(-50%); white-space: nowrap; padding: 9px 13px; border: 1px solid #d8d98f; border-radius: 4px; color: #f3edb5; background: #11190dcc; box-shadow: 0 6px 20px #0008; font-size: 11px; letter-spacing: .08em; }
 #interaction-prompt[hidden] { display: none; }
 #equipment-status { position: absolute; left: 18px; top: 58px; font-size: 8px; line-height: 1.7; color: #b6c4a0; letter-spacing: .05em; background: #10190bb0; padding: 5px 8px; }
@@ -161,7 +227,7 @@ body.demo-mode dialog#interaction { padding: 15px; }
 @media (max-width: 1050px) {
   body.demo-mode main { height: auto; min-height: 100dvh; grid-template-columns: minmax(0,1fr) 290px; grid-template-rows: auto 65vh auto; grid-template-areas: 'header header' 'game rail' 'questions rail'; }
   .question-rail,.rail { overflow: visible; } .question-rail { display: grid; grid-template-columns: 1fr; }
-  .question-rail #stage-progress { grid-template-columns: repeat(7,1fr); }
+  .question-rail #stage-progress { grid-template-columns: repeat(3,1fr); }
   #interaction[open] { grid-row: 1; }
 }
 @media (max-width: 760px) {
@@ -169,3 +235,22 @@ body.demo-mode dialog#interaction { padding: 15px; }
   .top-clock { margin-left: auto; } .who-buttons { order: 3; }
   .rail #hub { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
+
+.light-answer-slots { font-size: 13px; letter-spacing: .08em; color: #f1e7b0; font-weight: 700; margin: 0 0 8px; }
+.light-input button.pressed { background: #f1e7b0; color: #151a14; box-shadow: 0 0 14px #f1e7b0; opacity: 1; }
+
+/* Shared lifecycle styling for the live chain and Control Room. */
+.agent-chip[data-state="active"], .agent-chip[data-state="waiting"] {
+  border-color: #eadb82; background: #514b2b; color: #fff1a0;
+  box-shadow: 0 0 12px #e6d78040;
+}
+.agent-chip[data-state="done"] { border-color: #8da985; }
+.agent-node[data-state="waiting"] .agent-led {
+  background: #eadb82; box-shadow: 0 0 12px #e6d78080;
+}
+
+/* Only an active call is yellow. Returned/waiting agents are unlit. */
+.agent-node[data-state='done'], .agent-node[data-state='waiting'] { border-color:#343e2d; background:#1b2118; box-shadow:none; }
+.agent-node[data-state='done'] .agent-led, .agent-node[data-state='waiting'] .agent-led { background:#3d4734; border-color:#536046; box-shadow:none; }
+.agent-node[data-state='done'] strong, .agent-node[data-state='done'] .agent-state { color:#b1bea4; }
+.agent-chip[data-state='done'], .agent-chip[data-state='waiting'] { background:transparent; border-color:#536046; color:#b1bea4; box-shadow:none; }

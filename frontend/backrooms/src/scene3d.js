@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { MAP, TILE, LIGHT_COLORS } from './level.js';
+import { MAP, TILE, LIGHT_COLORS, SCAN_TIME } from './level.js';
 import { makeFlashlight, makeKey, makeScroll, makeRobotHands } from './props3d.js';
 
 const UNIT = 3, HEIGHT = 3.3;
@@ -92,13 +92,14 @@ export function createScene3D(host) {
   const labels = [];
   const sign = (text, x, y, z, color = '#d7e6c0') => {
     const c = document.createElement('canvas'); c.width = 512; c.height = 128;
-    const ctx = c.getContext('2d'); ctx.fillStyle = '#181e18'; ctx.fillRect(0,0,512,128);
+    const ctx = c.getContext('2d'); ctx.fillStyle = text === 'EXIT' ? '#b31324' : '#181e18'; ctx.fillRect(0,0,512,128);
     ctx.strokeStyle = color; ctx.lineWidth = 5; ctx.strokeRect(7,7,498,114);
     ctx.fillStyle = color; ctx.font = 'bold 32px monospace'; ctx.textAlign = 'center'; ctx.fillText(text,256,76);
     const texture = new THREE.CanvasTexture(c); texture.colorSpace = THREE.SRGBColorSpace;
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({map:texture})); sprite.position.set(x,y,z); sprite.scale.set(2.5,0.625,1); scene.add(sprite); labels.push(sprite); return sprite;
   };
-  let keyMesh, keySign, scrollMesh, scrollSign;
+  let keyMesh, keySign, scrollMesh, scrollSign, exitDoor, exitPosition;
+  let exitOpen = 0;
   const flashlightItem = makeFlashlight();
   flashlightItem.position.set(world(2 * TILE + TILE / 2), 0.42, world(1 * TILE + TILE / 2));
   flashlightItem.rotation.x = -0.18;
@@ -107,7 +108,35 @@ export function createScene3D(host) {
   const names = { C:'01 / LIGHT SEQUENCE', R:'02 / SYMBOL MEMORY', D:'06 / CALCULUS FILE', K:'04 / KEY', E:'07 / EXIT', S:'SAFE ZONE' };
   for (const obj of objects) {
     if (obj.cell === 'S') { box(obj.x,0.02,obj.z,2.7,0.04,2.7,material('#3c7760')); continue; }
-    const label = sign(names[obj.cell],obj.x,2.35,obj.z);
+    if (obj.cell === 'E') {
+      // East-facing doorway at the boundary, rather than a slab in the tile's center.
+      exitPosition = new THREE.Vector3(obj.x + 1.30, 0, obj.z);
+      const doorway = new THREE.Group();
+      doorway.position.copy(exitPosition); doorway.rotation.y = -Math.PI / 2;
+      scene.add(doorway);
+      const part = (parent, px, py, pz, w, h, d, mat) => {
+        const mesh = new THREE.Mesh(boxGeometry, mat);
+        mesh.position.set(px,py,pz); mesh.scale.set(w,h,d);
+        mesh.castShadow = mesh.receiveShadow = true; parent.add(mesh); return mesh;
+      };
+      const frame = material('#393d3d'), steel = material('#727b7b');
+      part(doorway,0,1.36,-.17,1.95,2.72,.08,new THREE.MeshBasicMaterial({color:'#fff0c9'}));
+      for (const side of [-1,1]) part(doorway,side*1.02,1.4,0,.13,2.8,.24,frame);
+      part(doorway,0,2.82,0,2.17,.16,.24,frame);
+      exitDoor = new THREE.Group(); exitDoor.position.set(-.94,0,.03); doorway.add(exitDoor);
+      part(exitDoor,.94,1.35,0,1.86,2.7,.10,steel);
+      part(exitDoor,.94,1.14,.09,1.42,.11,.12,frame);
+      part(exitDoor,.94,1.91,.063,.58,.58,.02,frame);
+      part(exitDoor,.94,1.91,.078,.46,.46,.01,new THREE.MeshBasicMaterial({color:'#aabbb8'}));
+      for (const y of [.28,2.4]) part(exitDoor,0,y,.06,.09,.18,.12,frame);
+      const exitLabel = sign('EXIT',0,0,0,'#ffffff');
+      const signMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.36,.34),
+        new THREE.MeshBasicMaterial({map:exitLabel.material.map}));
+      scene.remove(exitLabel); doorway.add(exitLabel); exitLabel.visible=false;
+      signMesh.position.set(0,3.08,.15); doorway.add(signMesh);
+      continue;
+    }
+    const label = sign(obj.cell === 'E' ? 'EXIT' : names[obj.cell],obj.x,2.35,obj.z, obj.cell === 'E' ? '#ffffff' : '#d7e6c0');
     if ('CR'.includes(obj.cell)) {
       box(obj.x,0.65,obj.z,1.05,1.3,0.6,metal);
       box(obj.x,1.4,obj.z,1.13,0.4,0.65,dark);
@@ -116,13 +145,46 @@ export function createScene3D(host) {
       keyMesh = makeKey(); keyMesh.position.set(obj.x,1.0,obj.z); scene.add(keyMesh); keySign = label;
     } else if (obj.cell === 'D') {
       scrollMesh = makeScroll(); scrollMesh.position.set(obj.x,0.85,obj.z); scene.add(scrollMesh); scrollSign = label;
-    } else if (obj.cell === 'E') box(obj.x,1.35,obj.z,1.3,2.7,0.25,material('#3f886b'));
+    }
   }
   for (const [x,text] of [[4,'LEFT'],[12,'CENTER'],[20,'RIGHT']]) sign(`03 / ${text}`, (x+0.5)*UNIT,2.5,9.5*UNIT);
   const monster = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.65,2.4,0.45), material('#100e0b')); body.position.y=1.2; monster.add(body);
-  for (const x of [-0.16,0.16]) { const eye = new THREE.Mesh(new THREE.SphereGeometry(0.045,8,8),lampMat); eye.position.set(x,2.12,-0.24); monster.add(eye); }
+  // Creature: tall gaunt humanoid, dark matte skin, red glowing eyes
+  const skinMat = new THREE.MeshStandardMaterial({color:'#181210', roughness:.9, emissive:'#0a0806', emissiveIntensity:.5});
+  // Legs — root at y=0, go up to y=1.1
+  for (const sx of [-0.18, 0.18]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(.26,1.1,.26), skinMat);
+    leg.position.set(sx, 0.55, 0); monster.add(leg);
+  }
+  // Torso — sits on top of legs, y=1.1 to y=2.7
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(.68,1.6,.38), skinMat);
+  torso.position.y = 1.9; monster.add(torso);
+  // Arms — hang from shoulder (~y=2.5), down to ~y=1.2
+  for (const sx of [-0.42, 0.42]) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(.20,1.3,.20), skinMat);
+    arm.position.set(sx, 1.75, 0); monster.add(arm);
+  }
+  // Head — elongated, sits at y=2.7 to y=3.45
+  const head = new THREE.Mesh(new THREE.BoxGeometry(.56,.75,.46), skinMat);
+  head.position.y = 3.08; monster.add(head);
+  // Eyes — in the face, at y≈3.08, front face z=-0.23
+  const eyeMat = new THREE.MeshBasicMaterial({color:'#ff2200'});
+  for (const ex of [-0.13, 0.13]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.07,10,8), eyeMat);
+    eye.position.set(ex, 3.10, -0.24); monster.add(eye);
+    const eg = new THREE.PointLight(0xff2200, 2.0, 2.5, 2); eg.position.copy(eye.position); monster.add(eg);
+  }
+  // Ambient red glow
+  const monsterGlow = new THREE.PointLight(0xff1a00, 3, 7, 2); monsterGlow.position.set(0, 1.8, 0); monster.add(monsterGlow);
   scene.add(monster);
+  // Same corridor the minimap marks as BLOCKED (tile x=12, y=10..14)
+  const blockedSign = sign('⛔ BLOCKED · MONSTER', 12.5 * UNIT, 2.5, 12 * UNIT, '#e0604e');
+  const blockedTape = new THREE.Mesh(new THREE.PlaneGeometry(UNIT, 0.18),
+    new THREE.MeshBasicMaterial({ color: '#d4402e', side: THREE.DoubleSide }));
+  blockedTape.position.set(12.5 * UNIT, 1.2, 12 * UNIT);
+  scene.add(blockedTape);
+  blockedSign.scale.set(4.4, 1.1, 1);
+  blockedSign.visible = blockedTape.visible = false;
   let previous = null, yaw = 0, targetYaw = 0, lastAt = 0, lastPickup = 0, grabUntil = 0;
   let previousDoors = null, doorFlashUntil = 0;
   const resize = () => { const w = Math.max(1,host.clientWidth), h = Math.max(1,host.clientHeight); renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); };
@@ -147,9 +209,18 @@ export function createScene3D(host) {
       }
       camera.position.set(cameraX,2.08,cameraZ);
       camera.lookAt(x+Math.sin(yaw)*(s.modal?1.8:7.5),s.modal?1.48:1.65,z+Math.cos(yaw)*(s.modal?1.8:7.5));
+      if (exitDoor) {
+        exitOpen = THREE.MathUtils.damp(exitOpen, s.won ? 1 : 0, 3, dt);
+        exitDoor.rotation.y = -exitOpen * Math.PI * .48;
+        if (s.won) {
+          camera.position.set(exitPosition.x-3.8,1.85,exitPosition.z);
+          camera.lookAt(exitPosition.x,1.65,exitPosition.z);
+        }
+      }
       const beamOrigin = camera.position.clone();
       flashlight.position.copy(beamOrigin);
       flashlight.target.position.set(x+Math.sin(yaw)*8, 0.55, z+Math.cos(yaw)*8);
+      if (s.won && exitPosition) flashlight.target.position.set(exitPosition.x,1.5,exitPosition.z);
       flashlight.visible = Boolean(s.hasFlashlight);
       hands.visible = Boolean(s.hasFlashlight);
       hands.userData.scroll.visible = Boolean(s.hasDocument && !s.documentAnswered);
@@ -160,7 +231,7 @@ export function createScene3D(host) {
       previousDoors = openState;
       const activity = document.getElementById('scene-activity');
       if (activity) {
-        activity.textContent = now < doorFlashUntil ? 'DOOR OPEN' : (s.message || 'LIVE 3D / PLAYER POV');
+        activity.textContent = now < doorFlashUntil ? 'DOOR OPEN' : (s.monsterActive ? 'MONSTER DETECTED · ROUTE BLOCKED' : (s.message || 'LIVE 3D / PLAYER POV'));
         activity.dataset.doorOpen = now < doorFlashUntil ? 'true' : 'false';
       }
       const pickupProgress = grabbing ? 1 - (grabUntil - now) / 520 : 1;
@@ -171,6 +242,19 @@ export function createScene3D(host) {
       hands.rotation.z = grabbing ? .045 * Math.sin(pickupEase * Math.PI) : 0;
       hands.rotation.x = grabbing ? -.10 * Math.sin(pickupEase * Math.PI) : 0;
       flashlight.intensity = s.hasFlashlight ? 18 * (grabbing ? pickupEase : 1) : 0;
+      const isAlarm = s.monsterActive && s.alarmRemaining > 0;
+      blockedSign.visible = blockedTape.visible = s.blockedPath === 'CENTER';
+      if (s.scanRemaining > 0 && s.hasFlashlight) {
+        // One full 360° turn with the torch; camera, beam and hands rotate together.
+        const progress = 1 - s.scanRemaining / SCAN_TIME;
+        const eased = progress * progress * (3 - 2 * progress);
+        const scanYaw = yaw + eased * Math.PI * 2;
+        camera.lookAt(x+Math.sin(scanYaw)*7.5, 1.65, z+Math.cos(scanYaw)*7.5);
+        flashlight.target.position.set(x + Math.sin(scanYaw)*8, 0.75, z + Math.cos(scanYaw)*8);
+        hands.rotation.y = 0;
+      } else {
+        hands.rotation.y = 0;
+      }
       fillLight.intensity = s.hasFlashlight ? (grabbing ? .045 + .055 * pickupEase : .10) : .035;
       hands.scale.setScalar(grabbing ? .62 : .58);
       flashlightItem.visible = !s.hasFlashlight;
@@ -179,7 +263,9 @@ export function createScene3D(host) {
       for (const {cell,mesh} of bulbs) mesh.material.emissiveIntensity=Number(cell)===s.activeLight?3:0.15;
       if (keyMesh) keyMesh.visible=keySign.visible=!s.hasKey;
       if (scrollMesh) scrollMesh.visible=scrollSign.visible=Boolean(!s.hasDocument && !s.documentAnswered);
-      monster.visible=s.monsterActive; monster.position.set(world(s.monster.x),0,world(s.monster.y)); monster.lookAt(x,0,z);
+      monster.visible=s.monsterActive;
+      monster.position.set(world(s.monster.x),0,world(s.monster.y));
+      monster.lookAt(x,0,z);
       renderer.domElement.dataset.position=`${s.player.x.toFixed(1)},${s.player.y.toFixed(1)}`;
       renderer.render(scene,camera);
     },
